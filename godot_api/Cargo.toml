@@ -1,0 +1,6 @@
+[package]
+name = "godot_api"
+version = "0.1.0"
+authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
+
+[dependencies]
