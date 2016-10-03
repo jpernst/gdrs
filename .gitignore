@@ -1,6 +1,7 @@
 /target
 /.cargo
 Cargo.lock
+*.pyc
 
 *.vim
 *.sw[onp]
