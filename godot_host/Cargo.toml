@@ -1,6 +1,10 @@
 [package]
-name = "godot_mod"
+name = "godot_host"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 
+[lib]
+crate-type = ["staticlib"]
+
 [dependencies]
+godot_alloc = { path = "../godot_alloc" }

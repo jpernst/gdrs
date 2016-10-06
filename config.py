@@ -1,7 +1,10 @@
 def can_build(platform):
-	return platform == "x11"
+	return True
 
 
 
 def configure(env):
-	pass
+	if env["platform"] == "windows":
+		raise AssertionError("TODO: link rust stdlib on windows")
+	else:
+		env.Append(LINKFLAGS = "-rdynamic")

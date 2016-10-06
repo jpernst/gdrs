@@ -1,0 +1,11 @@
+from rust_builders import add_rust_builders
+
+Import('env')
+
+cpp_env = env.Clone()
+cpp_env.Append(CXXFLAGS = ["-std=c++14"])
+cpp_env.add_source_files(env.modules_sources, "*.cpp")
+
+add_rust_builders(env)
+
+SConscript("godot_host/SCsub")

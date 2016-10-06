@@ -1,6 +1,8 @@
-/target
-/.cargo
-Cargo.lock
+*/target/
+*/.cargo
+*/Cargo.lock
+*.o
+*.a
 *.pyc
 
 *.vim

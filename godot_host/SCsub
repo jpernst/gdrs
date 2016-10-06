@@ -1,0 +1,11 @@
+import os
+
+Import("env")
+
+host_env = env.Clone()
+
+host = host_env.RustStaticLib("libgodot_host.a", "Cargo.toml")
+env.Prepend(LIBS = [host])
+env.Append(LINKFLAGS = ["-Wl,--whole-archive,-L{0},-l{1},--no-whole-archive".format(os.path.dirname(host[0].abspath), os.path.basename(host[0].abspath)[3:-2])])
+
+env.Append(LIBS = ["dl", "pthread", "gcc_s", "c", "m", "rt", "util", "c", "m", "rt", "util"])
