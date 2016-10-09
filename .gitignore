@@ -1,6 +1,7 @@
 */target/
 */.cargo
 */Cargo.lock
+*/rustc-version
 *.o
 *.a
 *.pyc
