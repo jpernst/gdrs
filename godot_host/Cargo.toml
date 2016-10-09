@@ -8,3 +8,4 @@ crate-type = ["staticlib"]
 
 [dependencies]
 godot_alloc = { path = "../godot_alloc" }
+godot_api = { path = "../godot_api" }

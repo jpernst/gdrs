@@ -3,4 +3,8 @@ name = "godot_api"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 
+[lib]
+crate-type = ["rlib", "dylib"]
+
 [dependencies]
+godot_macros = { path = "../godot_macros" }

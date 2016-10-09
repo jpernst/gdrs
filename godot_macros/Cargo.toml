@@ -1,6 +1,10 @@
 [package]
-name = "godot_alloc"
+name = "godot_macros"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 
+[lib]
+proc-macro = true
+
 [dependencies]
+syntex_syntax = { version = "0.44.1" }

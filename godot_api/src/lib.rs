@@ -1,6 +1,4 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-    }
-}
+#![feature(proc_macro)]
+
+#[macro_use]
+extern crate godot_macros;
