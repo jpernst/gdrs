@@ -1,11 +1,15 @@
 [package]
-name = "godot_api"
+name = "gdrs"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 publish = false
+build = "build.rs"
 
 [lib]
 crate-type = ["rlib", "dylib"]
 
+[build-dependencies]
+gdrs_gen = { path = "gdrs_gen" }
+
 [dependencies]
-godot_macros = { path = "../godot_macros" }
+gdrs_macros = { path = "gdrs_macros" }

@@ -1,5 +1,5 @@
 [package]
-name = "godot_macros"
+name = "gdrs_macros"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 publish = false

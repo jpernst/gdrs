@@ -1,5 +1,5 @@
 [package]
-name = "godot_host"
+name = "gdrs_host"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 publish = false
@@ -8,5 +8,5 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-godot_alloc = { path = "../godot_alloc" }
-godot_api = { path = "../godot_api" }
+gdrs_alloc = { path = "gdrs_alloc" }
+gdrs = { path = "../gdrs" }

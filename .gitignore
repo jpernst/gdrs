@@ -1,7 +1,7 @@
-*/target/
-*/.cargo
-*/Cargo.lock
-*/rustc-version
+/gdrs_host/rustc-version
+target/
+.cargo/
+Cargo.lock
 *.o
 *.a
 *.pyc

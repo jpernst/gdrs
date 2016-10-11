@@ -5,4 +5,4 @@ Import('env')
 env.add_source_files(env.modules_sources, "*.cpp")
 
 add_rust_builders(env)
-SConscript("godot_host/SCsub")
+SConscript("gdrs_host/SCsub")

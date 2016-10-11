@@ -85,26 +85,26 @@ def add_rust_builders(env):
 	def rust_godot_module_emitter(target, source, env):
 		target, source = rust_emitter(target, source, env)
 
-		target.append(os.path.join(os.path.dirname(target[0]), "godot_macros.cpp"))
+		target.append(os.path.join(os.path.dirname(target[0]), "gdrs_macros.cpp"))
 
 		return target, source
 
 
 
 	def concat_macros_cpp(target, source, env):
-		with open(os.path.join(os.path.dirname(target[0].abspath), "godot_macros.cpp"), "wb") as dest:
-			for filename in glob.iglob(os.path.join(env["ENV"]["GODOT_MACROS_CPP_DIR"], "*.cpp")):
+		with open(os.path.join(os.path.dirname(target[0].abspath), "gdrs_macros.cpp"), "wb") as dest:
+			for filename in glob.iglob(os.path.join(env["ENV"]["GDRS_MACROS_CPP_DIR"], "*.cpp")):
 				with open(filename, "rb") as src:
 					shutil.copyfileobj(src, dest)
 
 
 
 	def rust_godot_module_generator(source, target, env, for_signature):
-		godot_macros_cpp_dir = os.path.join(os.path.dirname(source[-1].abspath), "godot_macros.cpp.d")
-		env["ENV"]["GODOT_MACROS_CPP_DIR"] = godot_macros_cpp_dir
+		gdrs_macros_cpp_dir = os.path.join(os.path.dirname(source[-1].abspath), "gdrs_macros.cpp.d")
+		env["ENV"]["GDRS_MACROS_CPP_DIR"] = gdrs_macros_cpp_dir
 
 		return [
-			Delete(godot_macros_cpp_dir)
+			Delete(gdrs_macros_cpp_dir)
 		] + rust_staticlib_generator(source, target, env, for_signature) + [
 			concat_macros_cpp
 		]
