@@ -2,6 +2,7 @@
 name = "godot_macros"
 version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
+publish = false
 
 [lib]
 proc-macro = true

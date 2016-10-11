@@ -31,7 +31,10 @@ def add_rust_builders(env):
 
 
 	def scan_cargo_toml(manifest_path, source):
-		source.append(os.path.join(os.path.dirname(manifest_path), "Cargo.lock"))
+		cargo_lock_path = os.path.join(os.path.dirname(manifest_path), "Cargo.lock")
+		if os.path.exists(cargo_lock_path):
+			source.append(cargo_lock_path)
+
 		for root, dirnames, filenames in os.walk(os.path.dirname(manifest_path)):
 			for filename in fnmatch.filter(filenames, '*.rs'):
 				source.append(os.path.join(root, filename))
@@ -48,8 +51,8 @@ def add_rust_builders(env):
 
 
 	def rust_emitter(target, source, env):
-		if len(source) != 2 or os.path.basename(source[1].abspath) != "Cargo.toml":
-			raise AssertionError("cargo_emitter: `source` must be `Cargo.toml`")
+		if len(source) != 2 or os.path.basename(source[0].abspath) != "rustc-version" or os.path.basename(source[1].abspath) != "Cargo.toml":
+			raise AssertionError("cargo_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
 		if len(target) != 1:
 			raise AssertionError("cargo_emitter: only one `target` allowed")
 
@@ -71,7 +74,9 @@ def add_rust_builders(env):
 			actions = ["cargo build -q --manifest-path={}".format(source[1].abspath)]
 			profile = "debug"
 
-		actions.append(Copy("$TARGET", glob.glob(os.path.join( os.path.dirname(source[1].abspath), "target", profile, "lib*.a"))[0]))
+		crate_name = toml.load(source[1].abspath)["package"]["name"]
+
+		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(source[1].abspath), "target", profile, "lib{}.a".format(crate_name))))
 
 		return actions
 
