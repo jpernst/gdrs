@@ -1,0 +1,8 @@
+[package]
+name = "gdrs_obj"
+version = "0.1.0"
+authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
+
+[dependencies]
+serde = "0.8.12"
+serde_derive = "0.8.12"

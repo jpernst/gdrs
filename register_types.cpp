@@ -2,9 +2,9 @@
 
 
 
-void register_godot_rs_types() {
+void register_gdrs_types() {
 }
 
 
-void unregister_godot_rs_types() {
+void unregister_gdrs_types() {
 }
