@@ -1,0 +1,7 @@
+flags = [
+	# Add your own flags here (such as include paths)
+]
+
+headers = [
+	# Add your own headers here (globs are supported)
+]

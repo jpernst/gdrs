@@ -4,7 +4,7 @@ Import("env")
 
 host_env = env.Clone()
 
-[lib, macros] = host_env.RustGodotModule("libgdrs_host")
+[lib, macros] = host_env.RustGodotModule("libgdrs-host")
 env.Append(
 	LINKFLAGS = ["-Wl,--whole-archive,-L{},-l:{},--no-whole-archive".format(os.path.dirname(lib.abspath), os.path.basename(lib.abspath))],
 	LIBS = [lib, "dl", "pthread", "gcc_s", "c", "m", "rt", "util"])

@@ -1,0 +1,15 @@
+[package]
+name = "gdrs-parse"
+version = "0.1.0"
+authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
+
+[dependencies]
+gdrs-obj = { path = "../gdrs-obj" }
+clang = { version = "0.13.0", features = ["clang_3_9"] }
+serde = "0.8.12"
+serde_derive = "0.8.12"
+serde_json = "0.8.2"
+docopt = "0.6.86"
+rustc-serialize = "0.3.19"
+toml = { version = "0.2.1", default-features = false, features = ["serde"] }
+glob = "0.2.11"

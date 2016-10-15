@@ -74,7 +74,7 @@ def add_rust_builders(env):
 			actions = ["cargo build -q --manifest-path={}".format(source[1].abspath)]
 			profile = "debug"
 
-		crate_name = toml.load(source[1].abspath)["package"]["name"]
+		crate_name = toml.load(source[1].abspath)["package"]["name"].replace("-", "_")
 
 		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(source[1].abspath), "target", profile, "lib{}.a".format(crate_name))))
 

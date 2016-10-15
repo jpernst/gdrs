@@ -8,8 +8,9 @@ extern crate serde_derive;
 
 #[derive(Serialize, Deserialize)]
 pub struct Api {
-	pub classes: Vec<Class>,
+	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
+	pub classes: Vec<Class>,
 	pub functions: Vec<Function>,
 }
 
@@ -19,9 +20,10 @@ pub struct Api {
 pub struct Class {
 	pub include: String,
 	pub name: String,
-	pub fields: Vec<Field>,
-	pub functions: Vec<Function>,
+	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
+	pub fields: Vec<Field>,
+	pub methods: Vec<Function>,
 }
 
 
@@ -30,7 +32,6 @@ pub struct Class {
 pub enum Access {
 	Public,
 	Protected,
-	Private,
 }
 
 
@@ -69,6 +70,7 @@ pub struct Function {
 	pub semantic: FunctionSemantic,
 	pub return_ty: Type,
 	pub name: String,
+	pub args: Vec<Arg>,
 }
 
 
@@ -77,10 +79,30 @@ pub struct Function {
 pub struct Type {
 	pub is_const: bool,
 	pub semantic: TypeSemantic,
-	pub name: String,
-	pub args: Vec<Arg>,
+	pub name: Typename,
 }
 
+
+
+#[derive(Serialize, Deserialize)]
+pub enum Typename {
+	Void,
+	Bool,
+	Char,
+	UChar,
+	Short,
+	UShort,
+	Int,
+	UInt,
+	Long,
+	ULong,
+	LongLong,
+	ULongLong,
+	Float,
+	Double,
+	Class(String),
+	Enum(String),
+}
 
 
 #[derive(Serialize, Deserialize)]
@@ -94,13 +116,24 @@ pub struct Arg {
 #[derive(Serialize, Deserialize)]
 pub struct Enum {
 	pub name: String,
-	pub variants: Vec<Variant>,
+	pub underlying: Typename,
+	pub variants: Vec<Const>,
 }
 
 
 
 #[derive(Serialize, Deserialize)]
-pub struct Variant {
+pub struct Const {
 	pub name: String,
-	pub value: isize,
+	pub value: Value,
+}
+
+
+
+#[derive(Serialize, Deserialize)]
+pub enum Value {
+	Int(i64),
+	UInt(u64),
+	Float(f32),
+	Double(f64),
 }
