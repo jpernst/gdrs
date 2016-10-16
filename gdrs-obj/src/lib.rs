@@ -51,6 +51,7 @@ pub enum TypeSemantic {
 	Value,
 	Pointer,
 	Reference,
+	Array(usize),
 }
 
 
@@ -68,9 +69,9 @@ pub struct Field {
 pub struct Function {
 	pub access: Access,
 	pub semantic: FunctionSemantic,
-	pub return_ty: Type,
+	pub return_ty: Option<Type>,
 	pub name: String,
-	pub args: Vec<Arg>,
+	pub args: Option<Vec<Arg>>,
 }
 
 
@@ -100,9 +101,10 @@ pub enum Typename {
 	ULongLong,
 	Float,
 	Double,
-	Class(String),
+	Class(String, Option<Vec<Type>>),
 	Enum(String),
 }
+
 
 
 #[derive(Serialize, Deserialize)]

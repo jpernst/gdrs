@@ -256,13 +256,9 @@ fn parse_function(e: clang::Entity) -> gdrs_obj::Function {
 	gdrs_obj::Function{
 		access: gdrs_obj::Access::Public,
 		semantic: gdrs_obj::FunctionSemantic::Free,
-		return_ty: gdrs_obj::Type{
-			is_const: false,
-			semantic: gdrs_obj::TypeSemantic::Value,
-			name: gdrs_obj::Typename::Void,
-		},
+		return_ty: None,
 		name: e.get_name().unwrap(),
-		args: Vec::new(),
+		args: None,
 	}
 }
 
@@ -278,10 +274,15 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 			t = t.get_pointee_type().unwrap();
 			gdrs_obj::TypeSemantic::Reference
 		},
+		clang::TypeKind::ConstantArray => {
+			let size = t.get_size().unwrap();
+			t = t.get_element_type().unwrap();
+			gdrs_obj::TypeSemantic::Array(size)
+		},
 		_ => gdrs_obj::TypeSemantic::Value,
 	};
 
-	let ty = gdrs_obj::Type{
+	Some(gdrs_obj::Type{
 		is_const: t.is_const_qualified(),
 		semantic: semantic,
 		name: match t.get_kind() {
@@ -299,11 +300,27 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 			clang::TypeKind::Float => gdrs_obj::Typename::Float,
 			clang::TypeKind::Double => gdrs_obj::Typename::Double,
 
-			clang::TypeKind::Record => gdrs_obj::Typename::Class(t.get_declaration().unwrap().get_name().unwrap()),
-			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
-			k => panic!("Unsupported field kind {:?}", k),
-		},
-	};
+			clang::TypeKind::Record => {
+				if let Some(params) = t.get_template_argument_types().map(|va| va.into_iter().map(|a| parse_type(a.unwrap())).collect::<Vec<_>>()) {
+					if params.iter().any(|p| p.is_none()) {
+						return None;
+					}
 
-	Some(ty)
+					gdrs_obj::Typename::Class(
+						t.get_declaration().unwrap().get_name().unwrap(),
+						Some(params.into_iter().map(|p| p.unwrap()).collect())
+					)
+				} else {
+					gdrs_obj::Typename::Class(t.get_declaration().unwrap().get_name().unwrap(), None)
+				}
+			},
+
+			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
+
+			k => {
+				println!("WARNING: Unsupported type kind {:?}", k);
+				return None;
+			},
+		},
+	})
 }
