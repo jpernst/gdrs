@@ -139,12 +139,12 @@ fn main() {
 
 					},
 					clang::EntityKind::ClassDecl => {
-						let mut class = parse_class(&e);
+						let mut class = parse_class(e);
 						class.include = loc.to_string_lossy().into_owned();
 						api.classes.push(class);
 					},
 					clang::EntityKind::FunctionDecl => {
-						api.functions.push(parse_function(&e));
+						api.functions.push(parse_function(e));
 					},
 					_ => (),
 				}
@@ -196,7 +196,7 @@ fn parse_enum(e: &clang::Entity) -> gdrs_obj::Enum {
 
 
 
-fn parse_class(e: &clang::Entity) -> gdrs_obj::Class {
+fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 	let mut class = gdrs_obj::Class{
 		include: String::new(),
 		name: e.get_name().unwrap(),
@@ -226,7 +226,7 @@ fn parse_class(e: &clang::Entity) -> gdrs_obj::Class {
 				}
 			},
 			clang::EntityKind::FieldDecl => {
-				let ty = parse_type(&c.get_type().unwrap());
+				let ty = parse_type(c.get_type().unwrap());
 				if ty.is_none() {
 					return clang::EntityVisitResult::Continue;
 				}
@@ -239,7 +239,7 @@ fn parse_class(e: &clang::Entity) -> gdrs_obj::Class {
 				});
 			},
 			clang::EntityKind::Method => {
-				class.methods.push(parse_function(&c));
+				class.methods.push(parse_function(c));
 			},
 			_ => (),
 		}
@@ -252,7 +252,7 @@ fn parse_class(e: &clang::Entity) -> gdrs_obj::Class {
 
 
 
-fn parse_function(e: &clang::Entity) -> gdrs_obj::Function {
+fn parse_function(e: clang::Entity) -> gdrs_obj::Function {
 	gdrs_obj::Function{
 		access: gdrs_obj::Access::Public,
 		semantic: gdrs_obj::FunctionSemantic::Free,
@@ -268,21 +268,42 @@ fn parse_function(e: &clang::Entity) -> gdrs_obj::Function {
 
 
 
-fn parse_type(t: &clang::Type) -> Option<gdrs_obj::Type> {
-	match t.get_kind() {
-		clang::TypeKind::Bool => None,
-		clang::TypeKind::CharS | clang::TypeKind::SChar => None,
-		clang::TypeKind::CharU | clang::TypeKind::UChar => None,
-		clang::TypeKind::Short => None,
-		clang::TypeKind::UShort => None,
-		clang::TypeKind::Int => None,
-		clang::TypeKind::UInt => None,
-		clang::TypeKind::Long => None,
-		clang::TypeKind::ULong => None,
-		clang::TypeKind::LongLong => None,
-		clang::TypeKind::ULongLong => None,
-		clang::TypeKind::Float => None,
-		clang::TypeKind::Double => None,
-		_ => None,
-	}
+fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
+	let semantic = match t.get_kind() {
+		clang::TypeKind::Pointer => {
+			t = t.get_pointee_type().unwrap();
+			gdrs_obj::TypeSemantic::Pointer
+		},
+		clang::TypeKind::LValueReference => {
+			t = t.get_pointee_type().unwrap();
+			gdrs_obj::TypeSemantic::Reference
+		},
+		_ => gdrs_obj::TypeSemantic::Value,
+	};
+
+	let ty = gdrs_obj::Type{
+		is_const: t.is_const_qualified(),
+		semantic: semantic,
+		name: match t.get_kind() {
+			clang::TypeKind::Bool => gdrs_obj::Typename::Bool,
+			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Bool,
+			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::Bool,
+			clang::TypeKind::Short => gdrs_obj::Typename::Short,
+			clang::TypeKind::UShort => gdrs_obj::Typename::UShort,
+			clang::TypeKind::Int => gdrs_obj::Typename::Int,
+			clang::TypeKind::UInt => gdrs_obj::Typename::UInt,
+			clang::TypeKind::Long => gdrs_obj::Typename::Long,
+			clang::TypeKind::ULong => gdrs_obj::Typename::ULong,
+			clang::TypeKind::LongLong => gdrs_obj::Typename::LongLong,
+			clang::TypeKind::ULongLong => gdrs_obj::Typename::ULongLong,
+			clang::TypeKind::Float => gdrs_obj::Typename::Float,
+			clang::TypeKind::Double => gdrs_obj::Typename::Double,
+
+			clang::TypeKind::Record => gdrs_obj::Typename::Class(t.get_declaration().unwrap().get_name().unwrap()),
+			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
+			k => panic!("Unsupported field kind {:?}", k),
+		},
+	};
+
+	Some(ty)
 }
