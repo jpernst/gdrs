@@ -12,9 +12,8 @@ extern crate gdrs_obj;
 extern crate glob;
 
 use std::env;
-use std::fs;
+//use std::fs;
 use std::path;
-use std::io::Read;
 use docopt::Docopt;
 
 
@@ -23,17 +22,14 @@ const USAGE: &'static str = r#"
 Parse Godot source and generate JSON API description.
 
 Usage:
-	gdrs-parse [options] <godot-dir>
+	gdrs-parse [-o <output>] [-I <include> | -D <define>]... <file>...
 	gdrs-parse --help
 
 Options:
-	-e <extra>, --extra=<extra>       TOML file with extra input
-	-o <output>, --output=<output>    File to store JSON output
-	-h, --help                        Show this message
-
-Format of extra file is as follows:
-flags = ["<clang-flag>", ...]
-headers = ["<header-file>", ...]
+	-I <include>  Add an #include search path
+	-D <define>   Define a preprocessor symbol
+	-o <output>   Output file [default: -]
+	-h, --help    Show this message
 "#;
 
 
@@ -41,57 +37,36 @@ headers = ["<header-file>", ...]
 #[derive(RustcDecodable)]
 #[allow(non_snake_case)]
 struct Args {
-	pub flag_extra: Option<String>,
-	pub flag_output: Option<String>,
+	pub flag_o: String,
+	pub flag_I: Option<Vec<String>>,
+	pub flag_D: Option<Vec<String>>,
 	pub flag_help: bool,
-    pub arg_godot_dir: String,
-}
-
-
-
-#[derive(Deserialize)]
-struct Input {
-	flags: Vec<String>,
-	headers: Vec<String>,
+	pub arg_file: Vec<String>,
 }
 
 
 
 fn main() {
-	let args: Args = Docopt::new(USAGE)
-		.and_then(|d| d.argv(env::args().into_iter()).decode())
-		.unwrap_or_else(|e| e.exit());
+	let (output, flags, files) = {
+		let Args{flag_o: output, flag_I: includes, flag_D: defines, flag_help: help, arg_file: files} = Docopt::new(USAGE)
+			.and_then(|d| d.argv(env::args().into_iter()).decode())
+			.unwrap_or_else(|e| e.exit());
 
-	if args.flag_help {
-		println!("{}", USAGE);
-		return;
-	}
+		if help {
+			println!("{}", USAGE);
+			return;
+		}
 
-	let mut input = Input{
-		flags: vec![
-			"-x".into(),
-			"c++".into(),
-			"-Icore".into(),
-			format!("-I{}", path::Path::new("core").join("math").to_string_lossy()),
-			"-Itools".into(),
-			"-Idrivers".into(),
-			format!("-I{}", args.arg_godot_dir),
-			"-Imodules".into()
-		],
-		headers: vec![
-			path::Path::new("scene").join("3d").join("physics_joint.h").to_string_lossy().into_owned(),
-		],
+		let mut flags = vec!["-xc++".to_string()];
+		if let Some(includes) = includes {
+			flags.extend(includes.into_iter().map(|i| format!("-I{}", i)));
+		}
+		if let Some(defines) = defines {
+			flags.extend(defines.into_iter().map(|d| format!("-D{}", d)));
+		}
+
+		(output, flags, files)
 	};
-
-	if let Some(Input{flags, headers}) = args.flag_extra.as_ref().map(|e| {
-		let mut file = fs::File::open(e).unwrap();
-		let mut extra = String::new();
-		file.read_to_string(&mut extra).unwrap();
-		toml::decode_str::<Input>(&extra).unwrap()
-	}) {
-		input.flags.extend(flags.into_iter());
-		input.headers.extend(headers.into_iter());
-	}
 
 	let c = clang::Clang::new().unwrap();
 
@@ -101,37 +76,44 @@ fn main() {
 	let mut api = gdrs_obj::Api{
 		consts: Vec::new(),
 		enums: Vec::new(),
+		aliases: Vec::new(),
 		classes: Vec::new(),
 		functions: Vec::new(),
 	};
 
-	for header_pat in &input.headers {
-		let header = &path::Path::new(&args.arg_godot_dir).join(header_pat);
-		for header in glob::glob(&header.to_string_lossy()).unwrap() {
-			let header = header.unwrap();
+	for file_pat in &files {
+		for file in glob::glob(file_pat).unwrap() {
+			let file = file.unwrap();
 
-			let mut parser = index.parser(header);
-			parser.arguments(&input.flags);
+			let mut parser = index.parser(file);
+			parser.arguments(&flags);
 			//let parser = parser.detailed_preprocessing_record(true);
 			let parser = parser.skip_function_bodies(true);
 
 			let tu = parser.parse().unwrap();
 			tu.get_entity().visit_children(|e, _| {
-				let loc = match e.get_location().unwrap().get_expansion_location().file.get_path().strip_prefix(&args.arg_godot_dir) {
-					Ok(p) => p.to_owned(),
-					Err(_) => { return clang::EntityVisitResult::Continue; },
-				};
+				if e.is_in_system_header() {
+					return clang::EntityVisitResult::Continue;
+				}
+				let loc = e.get_location().unwrap().get_expansion_location().file.get_path();
 				if loc.components().any(|c| match c { path::Component::Normal(c) => c == "thirdparty", _ => false }) {
 					return clang::EntityVisitResult::Continue;
 				}
 
 				match e.get_kind() {
+					clang::EntityKind::VarDecl => {
+						let c = e.get_child(0).unwrap();
+					},
 					clang::EntityKind::EnumDecl => {
 						let _enum = parse_enum(&e);
 						if _enum.name == "const" {
-							let gdrs_obj::Enum{variants, ..} = _enum;
+							let gdrs_obj::Enum{variants, underlying, ..} = _enum;
 							for v in variants.into_iter() {
-								api.consts.push(v);
+								api.consts.push(gdrs_obj::Const{
+									ty: underlying.clone(),
+									name: v.name,
+									value: v.value,
+								});
 							}
 						} else {
 							api.enums.push(_enum);
@@ -158,34 +140,23 @@ fn main() {
 
 
 fn parse_enum(e: &clang::Entity) -> gdrs_obj::Enum {
+	let underlying = parse_type(e.get_enum_underlying_type().unwrap()).unwrap();
 	let mut _enum = gdrs_obj::Enum{
 		name: e.get_name().unwrap_or_else(|| "const".to_string()),
-		underlying: match e.get_enum_underlying_type().unwrap().get_kind() {
-			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Char,
-			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::UChar,
-			clang::TypeKind::Short => gdrs_obj::Typename::Short,
-			clang::TypeKind::UShort => gdrs_obj::Typename::UShort,
-			clang::TypeKind::Int => gdrs_obj::Typename::Int,
-			clang::TypeKind::UInt => gdrs_obj::Typename::UInt,
-			clang::TypeKind::Long => gdrs_obj::Typename::Long,
-			clang::TypeKind::ULong => gdrs_obj::Typename::ULong,
-			clang::TypeKind::LongLong => gdrs_obj::Typename::LongLong,
-			clang::TypeKind::ULongLong => gdrs_obj::Typename::ULongLong,
-			ut => panic!("Unsupported enum underlying type: {:?}", ut),
-		},
+		underlying: underlying.clone(),
 		variants: Vec::new(),
 	};
 
 	e.visit_children(|c, _| {
-		_enum.variants.push(gdrs_obj::Const{
+		_enum.variants.push(gdrs_obj::Variant{
 			name: c.get_name().unwrap(),
-			value: match _enum.underlying {
+			value: match _enum.underlying.name {
 				gdrs_obj::Typename::Char | gdrs_obj::Typename::Short | gdrs_obj::Typename::Int | gdrs_obj::Typename::Long | gdrs_obj::Typename::LongLong
 					=> gdrs_obj::Value::Int(c.get_enum_constant_value().map(|(v, _)| v).unwrap()),
 				gdrs_obj::Typename::UChar | gdrs_obj::Typename::UShort | gdrs_obj::Typename::UInt | gdrs_obj::Typename::ULong | gdrs_obj::Typename::ULongLong
 					=> gdrs_obj::Value::UInt(c.get_enum_constant_value().map(|(_, v)| v).unwrap()),
 				_ => unreachable!(),
-			}
+			},
 		});
 
 		clang::EntityVisitResult::Continue
@@ -200,10 +171,11 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 	let mut class = gdrs_obj::Class{
 		include: String::new(),
 		name: e.get_name().unwrap(),
+		consts: Vec::new(),
+		enums: Vec::new(),
+		aliases: Vec::new(),
 		fields: Vec::new(),
 		methods: Vec::new(),
-		enums: Vec::new(),
-		consts: Vec::new(),
 	};
 
 	e.visit_children(|c, _| {
@@ -219,24 +191,39 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 				if _enum.name == "const" {
 					let gdrs_obj::Enum{variants, ..} = _enum;
 					for v in variants.into_iter() {
-						class.consts.push(v);
+						class.consts.push(gdrs_obj::Const{
+							ty: _enum.underlying.clone(),
+							name: v.name,
+							value: v.value,
+						});
 					}
 				} else {
 					class.enums.push(_enum);
 				}
 			},
-			clang::EntityKind::FieldDecl => {
-				let ty = parse_type(c.get_type().unwrap());
-				if ty.is_none() {
-					return clang::EntityVisitResult::Continue;
-				}
-				let ty = ty.unwrap();
+			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
+				if c.get_type().unwrap().is_const_qualified() {
+					if let Some(val) = c.get_child(0).and_then(|exp| exp.evaluate()).and_then(|val| parse_value(val)) {
+						class.consts.push(gdrs_obj::Const{
+							ty: parse_type(c.get_type().unwrap()).unwrap(),
+							name: c.get_name().unwrap(),
+							value: val,
+						})
+					}
+				} else {
+					let ty = parse_type(c.get_type().unwrap());
+					if ty.is_none() {
+						return clang::EntityVisitResult::Continue;
+					}
+					let ty = ty.unwrap();
 
-				class.fields.push(gdrs_obj::Field{
-					access: if let clang::Accessibility::Public = access { gdrs_obj::Access::Public } else { gdrs_obj::Access::Protected },
-					name: c.get_name().unwrap(),
-					ty: ty,
-				});
+					class.fields.push(gdrs_obj::Field{
+						access: if let clang::Accessibility::Public = access { gdrs_obj::Access::Public } else { gdrs_obj::Access::Protected },
+						is_static: c.get_storage_class() == Some(clang::StorageClass::Static),
+						name: c.get_name().unwrap(),
+						ty: ty,
+					});
+				}
 			},
 			clang::EntityKind::Method => {
 				class.methods.push(parse_function(c));
@@ -287,8 +274,8 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 		semantic: semantic,
 		name: match t.get_kind() {
 			clang::TypeKind::Bool => gdrs_obj::Typename::Bool,
-			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Bool,
-			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::Bool,
+			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Char,
+			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::UChar,
 			clang::TypeKind::Short => gdrs_obj::Typename::Short,
 			clang::TypeKind::UShort => gdrs_obj::Typename::UShort,
 			clang::TypeKind::Int => gdrs_obj::Typename::Int,
@@ -299,6 +286,7 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 			clang::TypeKind::ULongLong => gdrs_obj::Typename::ULongLong,
 			clang::TypeKind::Float => gdrs_obj::Typename::Float,
 			clang::TypeKind::Double => gdrs_obj::Typename::Double,
+			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
 
 			clang::TypeKind::Record => {
 				if let Some(params) = t.get_template_argument_types().map(|va| va.into_iter().map(|a| parse_type(a.unwrap())).collect::<Vec<_>>()) {
@@ -315,12 +303,16 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 				}
 			},
 
-			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
-
 			k => {
 				println!("WARNING: Unsupported type kind {:?}", k);
 				return None;
 			},
 		},
 	})
+}
+
+
+
+fn parse_value(v: clang::EvaluationResult) -> Option<gdrs_obj::Value> {
+	panic!();
 }
