@@ -45,8 +45,8 @@ pub struct Variant {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Alias {
-	name: String,
-	ty: Type,
+	pub name: String,
+	pub ty: Type,
 }
 
 
@@ -108,7 +108,8 @@ pub struct Function {
 	pub semantic: FunctionSemantic,
 	pub return_ty: Option<Type>,
 	pub name: String,
-	pub args: Option<Vec<Arg>>,
+	pub params: Option<Vec<Param>>,
+	pub is_const: bool,
 }
 
 
@@ -145,7 +146,7 @@ pub enum Typename {
 
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Arg {
+pub struct Param {
 	pub ty: Type,
 	pub name: String,
 	pub default: Option<Value>,

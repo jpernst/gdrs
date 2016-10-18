@@ -131,6 +131,9 @@ fn main() {
 							api.enums.push(_enum);
 						}
 					},
+					clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
+						api.aliases.push(parse_alias(e));
+					},
 					clang::EntityKind::ClassDecl => {
 						let mut class = parse_class(e);
 						class.include = loc.to_string_lossy().into_owned();
@@ -188,6 +191,15 @@ fn parse_enum(e: &clang::Entity) -> gdrs_obj::Enum {
 
 
 
+fn parse_alias(e: clang::Entity) -> gdrs_obj::Alias {
+	gdrs_obj::Alias{
+		name: e.get_name().unwrap(),
+		ty: parse_type(e.get_typedef_underlying_type().unwrap()).unwrap(),
+	}
+}
+
+
+
 fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 	let mut class = gdrs_obj::Class{
 		include: String::new(),
@@ -221,6 +233,9 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 					class.enums.push(_enum);
 				}
 			},
+			clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
+				class.aliases.push(parse_alias(c));
+			},
 			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
 				if c.get_type().unwrap().is_const_qualified() {
 					if let Some(val) = c.get_child(0).and_then(|exp| parse_value(exp)) {
@@ -238,7 +253,7 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 					let ty = ty.unwrap();
 
 					class.fields.push(gdrs_obj::Field{
-						access: if let clang::Accessibility::Public = access { gdrs_obj::Access::Public } else { gdrs_obj::Access::Protected },
+						access: if let clang::Accessibility::Protected = access { gdrs_obj::Access::Protected } else { gdrs_obj::Access::Public },
 						is_static: c.get_storage_class() == Some(clang::StorageClass::Static),
 						name: c.get_name().unwrap(),
 						ty: ty,
@@ -246,7 +261,7 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 				}
 			},
 			clang::EntityKind::Method => {
-				if let Some(method) = parse_function(e) {
+				if let Some(method) = parse_function(c) {
 					class.methods.push(method);
 				}
 			},
@@ -262,15 +277,43 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 
 
 fn parse_function(e: clang::Entity) -> Option<gdrs_obj::Function> {
-	None
+	let ty = e.get_type().unwrap();
+	let result = ty.get_result_type().unwrap();
 
-//	gdrs_obj::Function{
-//		access: gdrs_obj::Access::Public,
-//		semantic: gdrs_obj::FunctionSemantic::Free,
-//		return_ty: None,
-//		name: e.get_name().unwrap(),
-//		args: None,
-//	}
+	Some(gdrs_obj::Function{
+		access: if let Some(clang::Accessibility::Protected) = e.get_accessibility() { gdrs_obj::Access::Protected } else { gdrs_obj::Access::Public },
+		semantic: if e.is_virtual_method() {
+			gdrs_obj::FunctionSemantic::Virtual
+		} else if e.is_static_method() {
+			gdrs_obj::FunctionSemantic::Static
+		} else if e.get_kind() == clang::EntityKind::Method {
+			gdrs_obj::FunctionSemantic::Method
+		} else {
+			gdrs_obj::FunctionSemantic::Free
+		},
+		return_ty: if result.get_kind() == clang::TypeKind::Void { None } else { if let Some(r) = parse_type(result) { Some(r) } else {
+			println!("WARNING: Unsupported return type: {:?}", result);
+			return None;
+		}},
+		name: e.get_name().unwrap(),
+		params: {
+			if let Some(params) = e.get_arguments().map(|vp| vp.into_iter().map(|p| (parse_type(p.get_type().unwrap()), p.get_name().unwrap(), p.get_child(0))).collect::<Vec<_>>()) {
+				if let Some(i) = params.iter().position(|&(ref p, _, _)| p.is_none()) {
+					println!("WARNING: Unsupported param type: {:?}", e.get_arguments().unwrap()[i].get_type());
+					return None;
+				}
+
+				Some(params.into_iter().map(|(p, n, d)| gdrs_obj::Param{
+					ty: p.unwrap(),
+					name: n,
+					default: d.and_then(|d| parse_value(d)),
+				}).collect())
+			} else {
+				None
+			}
+		},
+		is_const: e.is_const_method(),
+	})
 }
 
 
@@ -315,8 +358,9 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
 
 			clang::TypeKind::Record => {
-				if let Some(params) = t.get_template_argument_types().map(|va| va.into_iter().map(|a| parse_type(a.unwrap())).collect::<Vec<_>>()) {
-					if params.iter().any(|p| p.is_none()) {
+				if let Some(params) = t.get_template_argument_types().map(|vp| vp.into_iter().map(|p| parse_type(p.unwrap())).collect::<Vec<_>>()) {
+					if let Some(i) = params.iter().position(|p| p.is_none()) {
+						println!("WARNING: Unsupported template param type: {:?}", t.get_template_argument_types().unwrap()[i]);
 						return None;
 					}
 
