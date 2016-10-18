@@ -3,6 +3,7 @@
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde_json;
 extern crate clang;
 extern crate docopt;
 #[macro_use]
@@ -12,8 +13,9 @@ extern crate gdrs_obj;
 extern crate glob;
 
 use std::env;
-//use std::fs;
+use std::fs;
 use std::path;
+use std::io::Write;
 use docopt::Docopt;
 
 
@@ -102,7 +104,17 @@ fn main() {
 
 				match e.get_kind() {
 					clang::EntityKind::VarDecl => {
-						let c = e.get_child(0).unwrap();
+						if e.get_type().unwrap().is_const_qualified() {
+							if let Some(val) = e.get_child(0).and_then(|exp| parse_value(exp)) {
+								api.consts.push(gdrs_obj::Const{
+									ty: parse_type(e.get_type().unwrap()).or_else(|| parse_type(e.get_child(0).unwrap().get_type().unwrap())).unwrap(),
+									name: e.get_name().unwrap(),
+									value: val,
+								})
+							}
+						} else {
+							println!("WARNING: Unsupported global variable: {}", e.get_name().unwrap());
+						}
 					},
 					clang::EntityKind::EnumDecl => {
 						let _enum = parse_enum(&e);
@@ -118,7 +130,6 @@ fn main() {
 						} else {
 							api.enums.push(_enum);
 						}
-
 					},
 					clang::EntityKind::ClassDecl => {
 						let mut class = parse_class(e);
@@ -126,7 +137,9 @@ fn main() {
 						api.classes.push(class);
 					},
 					clang::EntityKind::FunctionDecl => {
-						api.functions.push(parse_function(e));
+						if let Some(func) = parse_function(e) {
+							api.functions.push(func);
+						}
 					},
 					_ => (),
 				}
@@ -134,6 +147,14 @@ fn main() {
 				clang::EntityVisitResult::Continue
 			});
 		}
+	}
+
+	let json = serde_json::to_string_pretty(&api).unwrap();
+	if output == "-" {
+		println!("{}", json);
+	} else {
+		let mut file = fs::File::create(path::Path::new(&output)).unwrap();
+		write!(file, "{}", json).unwrap();
 	}
 }
 
@@ -184,7 +205,6 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 			return clang::EntityVisitResult::Continue
 		}
 
-		println!("{:?}", c.get_kind());
 		match c.get_kind() {
 			clang::EntityKind::EnumDecl => {
 				let _enum = parse_enum(&c);
@@ -203,9 +223,9 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 			},
 			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
 				if c.get_type().unwrap().is_const_qualified() {
-					if let Some(val) = c.get_child(0).and_then(|exp| exp.evaluate()).and_then(|val| parse_value(val)) {
+					if let Some(val) = c.get_child(0).and_then(|exp| parse_value(exp)) {
 						class.consts.push(gdrs_obj::Const{
-							ty: parse_type(c.get_type().unwrap()).unwrap(),
+							ty: parse_type(c.get_type().unwrap()).or_else(|| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap(),
 							name: c.get_name().unwrap(),
 							value: val,
 						})
@@ -226,7 +246,9 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 				}
 			},
 			clang::EntityKind::Method => {
-				class.methods.push(parse_function(c));
+				if let Some(method) = parse_function(e) {
+					class.methods.push(method);
+				}
 			},
 			_ => (),
 		}
@@ -239,14 +261,16 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 
 
 
-fn parse_function(e: clang::Entity) -> gdrs_obj::Function {
-	gdrs_obj::Function{
-		access: gdrs_obj::Access::Public,
-		semantic: gdrs_obj::FunctionSemantic::Free,
-		return_ty: None,
-		name: e.get_name().unwrap(),
-		args: None,
-	}
+fn parse_function(e: clang::Entity) -> Option<gdrs_obj::Function> {
+	None
+
+//	gdrs_obj::Function{
+//		access: gdrs_obj::Access::Public,
+//		semantic: gdrs_obj::FunctionSemantic::Free,
+//		return_ty: None,
+//		name: e.get_name().unwrap(),
+//		args: None,
+//	}
 }
 
 
@@ -273,6 +297,8 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 		is_const: t.is_const_qualified(),
 		semantic: semantic,
 		name: match t.get_kind() {
+			clang::TypeKind::Auto => { return None; }
+
 			clang::TypeKind::Bool => gdrs_obj::Typename::Bool,
 			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Char,
 			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::UChar,
@@ -304,7 +330,7 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 			},
 
 			k => {
-				println!("WARNING: Unsupported type kind {:?}", k);
+				println!("WARNING: Unsupported type kind: {:?}", k);
 				return None;
 			},
 		},
@@ -313,6 +339,34 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 
 
 
-fn parse_value(v: clang::EvaluationResult) -> Option<gdrs_obj::Value> {
-	panic!();
+fn parse_value(exp: clang::Entity) -> Option<gdrs_obj::Value> {
+	if let (Some(kind), Some(val)) = (exp.get_type().map(|t| t.get_kind()), exp.evaluate()) {
+		match val {
+			clang::EvaluationResult::Integer(i)
+				if kind == clang::TypeKind::CharU
+				|| kind == clang::TypeKind::UChar
+				|| kind == clang::TypeKind::UShort
+				|| kind == clang::TypeKind::UInt
+				|| kind == clang::TypeKind::ULong
+				|| kind == clang::TypeKind::ULongLong
+			=> Some(gdrs_obj::Value::UInt(i as u64)),
+			clang::EvaluationResult::Integer(i)
+				if kind == clang::TypeKind::CharS
+				|| kind == clang::TypeKind::SChar
+				|| kind == clang::TypeKind::Short
+				|| kind == clang::TypeKind::Int
+				|| kind == clang::TypeKind::Long
+				|| kind == clang::TypeKind::LongLong
+			=> Some(gdrs_obj::Value::Int(i)),
+			clang::EvaluationResult::Float(d) if kind == clang::TypeKind::Float => Some(gdrs_obj::Value::Float(d as f32)),
+			clang::EvaluationResult::Float(d) if kind == clang::TypeKind::Double => Some(gdrs_obj::Value::Double(d)),
+			clang::EvaluationResult::String(s) => Some(gdrs_obj::Value::String(s.to_string_lossy().into_owned())),
+			v => {
+				println!("WARNING: Unsupported evaluation result: {:?}", v);
+				return None;
+			},
+		}
+	} else {
+		None
+	}
 }

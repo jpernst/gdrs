@@ -1,4 +1,4 @@
-/gdrs_host/rustc-version
+/gdrs-host/rustc-version
 target/
 .cargo/
 Cargo.lock
