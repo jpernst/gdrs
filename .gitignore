@@ -2,6 +2,8 @@
 target/
 .cargo/
 Cargo.lock
+gdrs-macros.cpp
+gdrs-macros.cpp.d/
 *.o
 *.a
 *.pyc

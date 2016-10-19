@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Jameson Ernst <j.patrick.ernst@gmail.com>"]
 
 [dependencies]
-gdrs-obj = { path = "../gdrs-obj" }
+gdrs-api = { path = "../gdrs-api" }
 clang = { version = "0.13.0", features = ["clang_3_9"] }
 serde = "0.8.12"
 serde_derive = "0.8.12"

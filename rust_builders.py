@@ -85,14 +85,14 @@ def add_rust_builders(env):
 	def rust_godot_module_emitter(target, source, env):
 		target, source = rust_emitter(target, source, env)
 
-		target.append(os.path.join(os.path.dirname(target[0]), "gdrs_macros.cpp"))
+		target.append(os.path.join(os.path.dirname(target[0]), "gdrs-macros.cpp"))
 
 		return target, source
 
 
 
 	def concat_macros_cpp(target, source, env):
-		with open(os.path.join(os.path.dirname(target[0].abspath), "gdrs_macros.cpp"), "wb") as dest:
+		with open(os.path.join(os.path.dirname(target[0].abspath), "gdrs-macros.cpp"), "wb") as dest:
 			for filename in glob.iglob(os.path.join(env["ENV"]["GDRS_MACROS_CPP_DIR"], "*.cpp")):
 				with open(filename, "rb") as src:
 					shutil.copyfileobj(src, dest)
@@ -100,7 +100,7 @@ def add_rust_builders(env):
 
 
 	def rust_godot_module_generator(source, target, env, for_signature):
-		gdrs_macros_cpp_dir = os.path.join(os.path.dirname(source[-1].abspath), "gdrs_macros.cpp.d")
+		gdrs_macros_cpp_dir = os.path.join(os.path.dirname(source[-1].abspath), "gdrs-macros.cpp.d")
 		env["ENV"]["GDRS_MACROS_CPP_DIR"] = gdrs_macros_cpp_dir
 
 		return [

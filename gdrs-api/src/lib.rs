@@ -6,7 +6,7 @@ extern crate serde_derive;
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Namespace {
 	pub name: String,
 	pub consts: Vec<Const>,
@@ -19,7 +19,7 @@ pub struct Namespace {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Const {
 	pub name: String,
 	pub ty: TypeRef,
@@ -28,7 +28,7 @@ pub struct Const {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Enum {
 	pub name: String,
 	pub underlying: TypeRef,
@@ -37,7 +37,7 @@ pub struct Enum {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Variant {
 	pub name: String,
 	pub value: Value,
@@ -45,7 +45,7 @@ pub struct Variant {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TypeAlias {
 	pub name: String,
 	pub ty: TypeRef,
@@ -53,7 +53,7 @@ pub struct TypeAlias {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Class {
 	pub include: String,
 	pub name: String,
@@ -66,7 +66,7 @@ pub struct Class {
 
 
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Access {
 	Public,
 	Protected,
@@ -74,7 +74,7 @@ pub enum Access {
 
 
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum FunctionSemantic {
 	Free,
 	Static,
@@ -84,18 +84,20 @@ pub enum FunctionSemantic {
 
 
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum TypeSemantic {
 	Value,
 	Pointer,
-	DoublePointer,
+	PointerToPointer,
 	Reference,
+	ReferenceToPointer,
 	Array(usize),
+	ArrayOfPointer(usize),
 }
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Field {
 	pub name: String,
 	pub ty: TypeRef,
@@ -105,7 +107,7 @@ pub struct Field {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Function {
 	pub name: String,
 	pub params: Vec<Param>,
@@ -117,7 +119,7 @@ pub struct Function {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TypeRef {
 	pub name: TypeName,
 	pub semantic: TypeSemantic,
@@ -126,7 +128,7 @@ pub struct TypeRef {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TypeName {
 	Void,
 	Bool,
@@ -149,7 +151,7 @@ pub enum TypeName {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Param {
 	pub name: String,
 	pub ty: TypeRef,
@@ -158,7 +160,7 @@ pub struct Param {
 
 
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Value {
 	Int(i64),
 	UInt(u64),
