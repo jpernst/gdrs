@@ -15,7 +15,8 @@ extern crate glob;
 use std::env;
 use std::fs;
 use std::path;
-use std::io::Write;
+use std::io::{self, Write};
+use std::ffi::OsStr;
 use docopt::Docopt;
 
 
@@ -74,15 +75,17 @@ fn main() {
 
 	let mut index = clang::Index::new(&c, true, false);
 	index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
-
-	let mut api = gdrs_obj::Api{
+	let mut api = gdrs_obj::Namespace{
+		name: "".to_string(),
 		consts: Vec::new(),
 		enums: Vec::new(),
 		aliases: Vec::new(),
 		classes: Vec::new(),
 		functions: Vec::new(),
+		namespaces: Vec::new(),
 	};
 
+	let mut tus = Vec::new();
 	for file_pat in &files {
 		for file in glob::glob(file_pat).unwrap() {
 			let file = file.unwrap();
@@ -93,63 +96,14 @@ fn main() {
 			let parser = parser.skip_function_bodies(true);
 
 			let tu = parser.parse().unwrap();
-			tu.get_entity().visit_children(|e, _| {
-				if e.is_in_system_header() {
-					return clang::EntityVisitResult::Continue;
-				}
-				let loc = e.get_location().unwrap().get_expansion_location().file.get_path();
-				if loc.components().any(|c| match c { path::Component::Normal(c) => c == "thirdparty", _ => false }) {
-					return clang::EntityVisitResult::Continue;
-				}
-
-				match e.get_kind() {
-					clang::EntityKind::VarDecl => {
-						if e.get_type().unwrap().is_const_qualified() {
-							if let Some(val) = e.get_child(0).and_then(|exp| parse_value(exp)) {
-								api.consts.push(gdrs_obj::Const{
-									ty: parse_type(e.get_type().unwrap()).or_else(|| parse_type(e.get_child(0).unwrap().get_type().unwrap())).unwrap(),
-									name: e.get_name().unwrap(),
-									value: val,
-								})
-							}
-						} else {
-							println!("WARNING: Unsupported global variable: {}", e.get_name().unwrap());
-						}
-					},
-					clang::EntityKind::EnumDecl => {
-						let _enum = parse_enum(&e);
-						if _enum.name == "const" {
-							let gdrs_obj::Enum{variants, underlying, ..} = _enum;
-							for v in variants.into_iter() {
-								api.consts.push(gdrs_obj::Const{
-									ty: underlying.clone(),
-									name: v.name,
-									value: v.value,
-								});
-							}
-						} else {
-							api.enums.push(_enum);
-						}
-					},
-					clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
-						api.aliases.push(parse_alias(e));
-					},
-					clang::EntityKind::ClassDecl => {
-						let mut class = parse_class(e);
-						class.include = loc.to_string_lossy().into_owned();
-						api.classes.push(class);
-					},
-					clang::EntityKind::FunctionDecl => {
-						if let Some(func) = parse_function(e) {
-							api.functions.push(func);
-						}
-					},
-					_ => (),
-				}
-
-				clang::EntityVisitResult::Continue
-			});
+			if let Some(ns) = parse_namespace(tu.get_entity()) {
+				tus.push(ns);
+			}
 		}
+	}
+
+	for tu in tus.into_iter() {
+		merge_namespace(&mut api, tu);
 	}
 
 	let json = serde_json::to_string_pretty(&api).unwrap();
@@ -158,6 +112,136 @@ fn main() {
 	} else {
 		let mut file = fs::File::create(path::Path::new(&output)).unwrap();
 		write!(file, "{}", json).unwrap();
+	}
+}
+
+
+
+fn parse_namespace(e: clang::Entity) -> Option<gdrs_obj::Namespace> {
+	let name = e.get_name();
+	if let None = name {
+		return None;
+	}
+
+	let mut ns = gdrs_obj::Namespace{
+		name: name.unwrap(),
+		consts: Vec::with_capacity(0),
+		enums: Vec::with_capacity(0),
+		aliases: Vec::with_capacity(0),
+		classes: Vec::with_capacity(0),
+		functions: Vec::with_capacity(0),
+		namespaces: Vec::with_capacity(0),
+	};
+
+	e.visit_children(|c, _| {
+		if c.is_in_system_header() {
+			return clang::EntityVisitResult::Continue;
+		}
+		let loc = c.get_location().unwrap().get_expansion_location().file.get_path();
+		if loc.extension() == Some(OsStr::new("cpp")) || loc.components().any(|c| c == path::Component::Normal(OsStr::new("thirdparty"))) {
+			return clang::EntityVisitResult::Continue;
+		}
+
+		match c.get_kind() {
+			clang::EntityKind::VarDecl => {
+				if c.get_type().unwrap().is_const_qualified() {
+					if let Some(val) = c.get_child(0).and_then(|exp| parse_value(exp)) {
+						ns.consts.push(gdrs_obj::Const{
+							ty: parse_type(c.get_type().unwrap()).or_else(|| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap(),
+							name: c.get_name().unwrap(),
+							value: val,
+						})
+					}
+				} else {
+					let _ = writeln!(io::stderr(), "WARNING: Unsupported global variable `{}`: {:?}", c.get_name().unwrap(), c);
+				}
+			},
+			clang::EntityKind::EnumDecl => {
+				let _enum = parse_enum(&c);
+				if _enum.name == "const" {
+					let gdrs_obj::Enum{variants, underlying, ..} = _enum;
+					for v in variants.into_iter() {
+						ns.consts.push(gdrs_obj::Const{
+							ty: underlying.clone(),
+							name: v.name,
+							value: v.value,
+						});
+					}
+				} else {
+					ns.enums.push(_enum);
+				}
+			},
+			clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
+				if let Some(alias) = parse_alias(c) {
+					ns.aliases.push(alias);
+				}
+			},
+			clang::EntityKind::ClassDecl => {
+				let mut class = parse_class(c);
+				class.include = loc.to_string_lossy().into_owned();
+				ns.classes.push(class);
+			},
+			clang::EntityKind::FunctionDecl => {
+				if let Some(func) = parse_function(c) {
+					ns.functions.push(func);
+				}
+			},
+			clang::EntityKind::Namespace => {
+				if let Some(cns) = parse_namespace(c) {
+					if let Some(dns) = ns.namespaces.iter_mut().find(|dns| dns.name == cns.name) {
+						merge_namespace(dns, cns);
+						return clang::EntityVisitResult::Continue;
+					}
+
+					ns.namespaces.push(cns);
+				}
+			},
+			_ => (),
+		}
+
+		clang::EntityVisitResult::Continue
+	});
+
+	Some(ns)
+}
+
+
+
+fn merge_namespace(dst: &mut gdrs_obj::Namespace, src: gdrs_obj::Namespace) {
+	let gdrs_obj::Namespace{name: _, consts, enums, aliases, classes, functions, namespaces} = src;
+
+	for sc in consts.into_iter() {
+		if !dst.consts.iter().any(|dc| dc.name == sc.name) {
+			dst.consts.push(sc);
+		}
+	}
+	for se in enums.into_iter() {
+		if !dst.enums.iter().any(|de| de.name == se.name) {
+			dst.enums.push(se);
+		}
+	}
+	for sa in aliases.into_iter() {
+		if !dst.aliases.iter().any(|da| da.name == sa.name) {
+			dst.aliases.push(sa);
+		}
+	}
+	for sc in classes.into_iter() {
+		if !dst.classes.iter().any(|dc| dc.name == sc.name) {
+			dst.classes.push(sc);
+		}
+	}
+	for sf in functions.into_iter() {
+		if !dst.functions.iter().any(|df| df.name == sf.name) {
+			dst.functions.push(sf);
+		}
+	}
+	for sn in namespaces.into_iter() {
+		if let Some(mut dn) = dst.namespaces.iter_mut().find(|dn| dn.name == sn.name) {
+			merge_namespace(dn, sn);
+			continue;
+		}
+
+		dst.namespaces.push(sn);
 	}
 }
 
@@ -175,9 +259,9 @@ fn parse_enum(e: &clang::Entity) -> gdrs_obj::Enum {
 		_enum.variants.push(gdrs_obj::Variant{
 			name: c.get_name().unwrap(),
 			value: match _enum.underlying.name {
-				gdrs_obj::Typename::Char | gdrs_obj::Typename::Short | gdrs_obj::Typename::Int | gdrs_obj::Typename::Long | gdrs_obj::Typename::LongLong
+				gdrs_obj::TypeName::Char | gdrs_obj::TypeName::Short | gdrs_obj::TypeName::Int | gdrs_obj::TypeName::Long | gdrs_obj::TypeName::LongLong
 					=> gdrs_obj::Value::Int(c.get_enum_constant_value().map(|(v, _)| v).unwrap()),
-				gdrs_obj::Typename::UChar | gdrs_obj::Typename::UShort | gdrs_obj::Typename::UInt | gdrs_obj::Typename::ULong | gdrs_obj::Typename::ULongLong
+				gdrs_obj::TypeName::UChar | gdrs_obj::TypeName::UShort | gdrs_obj::TypeName::UInt | gdrs_obj::TypeName::ULong | gdrs_obj::TypeName::ULongLong
 					=> gdrs_obj::Value::UInt(c.get_enum_constant_value().map(|(_, v)| v).unwrap()),
 				_ => unreachable!(),
 			},
@@ -191,10 +275,15 @@ fn parse_enum(e: &clang::Entity) -> gdrs_obj::Enum {
 
 
 
-fn parse_alias(e: clang::Entity) -> gdrs_obj::Alias {
-	gdrs_obj::Alias{
-		name: e.get_name().unwrap(),
-		ty: parse_type(e.get_typedef_underlying_type().unwrap()).unwrap(),
+fn parse_alias(e: clang::Entity) -> Option<gdrs_obj::TypeAlias> {
+	if let Some(ty) = parse_type(e.get_typedef_underlying_type().unwrap()) {
+		Some(gdrs_obj::TypeAlias{
+			name: e.get_name().unwrap(),
+			ty: ty,
+		})
+	} else {
+		let _ = writeln!(io::stderr(), "WARNING: Unsupported type alias `{}`: {:?}", e.get_name().unwrap(), e);
+		None
 	}
 }
 
@@ -204,11 +293,11 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 	let mut class = gdrs_obj::Class{
 		include: String::new(),
 		name: e.get_name().unwrap(),
-		consts: Vec::new(),
-		enums: Vec::new(),
-		aliases: Vec::new(),
-		fields: Vec::new(),
-		methods: Vec::new(),
+		consts: Vec::with_capacity(0),
+		enums: Vec::with_capacity(0),
+		aliases: Vec::with_capacity(0),
+		fields: Vec::with_capacity(0),
+		methods: Vec::with_capacity(0),
 	};
 
 	e.visit_children(|c, _| {
@@ -234,7 +323,9 @@ fn parse_class(e: clang::Entity) -> gdrs_obj::Class {
 				}
 			},
 			clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
-				class.aliases.push(parse_alias(c));
+				if let Some(alias) = parse_alias(c) {
+					class.aliases.push(alias);
+				}
 			},
 			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
 				if c.get_type().unwrap().is_const_qualified() {
@@ -281,7 +372,36 @@ fn parse_function(e: clang::Entity) -> Option<gdrs_obj::Function> {
 	let result = ty.get_result_type().unwrap();
 
 	Some(gdrs_obj::Function{
-		access: if let Some(clang::Accessibility::Protected) = e.get_accessibility() { gdrs_obj::Access::Protected } else { gdrs_obj::Access::Public },
+		name: e.get_name().unwrap(),
+		params: {
+			if let Some(params) = e.get_arguments()
+				.map(|vp| vp.into_iter().map(|p| (parse_type(p.get_type().unwrap()), p.get_name().unwrap_or_else(|| "".to_string()), p.get_child(0)))
+				.collect::<Vec<_>>())
+			{
+				if let Some(i) = params.iter().position(|&(ref p, _, _)| p.is_none()) {
+					let param = e.get_arguments().unwrap()[i];
+					if param.get_type().unwrap().get_kind() != clang::TypeKind::Unexposed {
+						let _ = writeln!(io::stderr(), "WARNING: Unsupported param type `{:?}`: {:?}", param, e);
+					}
+					return None;
+				}
+
+				params.into_iter().map(|(p, n, d)| gdrs_obj::Param{
+					ty: p.unwrap(),
+					name: n,
+					default: d.and_then(|d| parse_value(d)),
+				}).collect()
+			} else {
+				Vec::with_capacity(0)
+			}
+		},
+		return_ty: if result.get_kind() == clang::TypeKind::Void { None } else { if let Some(r) = parse_type(result) { Some(r) } else {
+			if result.get_kind() != clang::TypeKind::Unexposed {
+				let _ = writeln!(io::stderr(), "WARNING: Unsupported return type `{:?}`: {:?}", result, e);
+			}
+
+			return None;
+		}},
 		semantic: if e.is_virtual_method() {
 			gdrs_obj::FunctionSemantic::Virtual
 		} else if e.is_static_method() {
@@ -291,38 +411,27 @@ fn parse_function(e: clang::Entity) -> Option<gdrs_obj::Function> {
 		} else {
 			gdrs_obj::FunctionSemantic::Free
 		},
-		return_ty: if result.get_kind() == clang::TypeKind::Void { None } else { if let Some(r) = parse_type(result) { Some(r) } else {
-			println!("WARNING: Unsupported return type: {:?}", result);
-			return None;
-		}},
-		name: e.get_name().unwrap(),
-		params: {
-			if let Some(params) = e.get_arguments().map(|vp| vp.into_iter().map(|p| (parse_type(p.get_type().unwrap()), p.get_name().unwrap(), p.get_child(0))).collect::<Vec<_>>()) {
-				if let Some(i) = params.iter().position(|&(ref p, _, _)| p.is_none()) {
-					println!("WARNING: Unsupported param type: {:?}", e.get_arguments().unwrap()[i].get_type());
-					return None;
-				}
-
-				Some(params.into_iter().map(|(p, n, d)| gdrs_obj::Param{
-					ty: p.unwrap(),
-					name: n,
-					default: d.and_then(|d| parse_value(d)),
-				}).collect())
-			} else {
-				None
-			}
-		},
+		access: if let Some(clang::Accessibility::Protected) = e.get_accessibility() { gdrs_obj::Access::Protected } else { gdrs_obj::Access::Public },
 		is_const: e.is_const_method(),
 	})
 }
 
 
 
-fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
+fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::TypeRef> {
+	if t.get_kind() == clang::TypeKind::Elaborated {
+		t = t.get_elaborated_type().unwrap();
+	}
+
 	let semantic = match t.get_kind() {
 		clang::TypeKind::Pointer => {
 			t = t.get_pointee_type().unwrap();
-			gdrs_obj::TypeSemantic::Pointer
+			if t.get_kind() == clang::TypeKind::Pointer {
+				t = t.get_pointee_type().unwrap();
+				gdrs_obj::TypeSemantic::DoublePointer
+			} else {
+				gdrs_obj::TypeSemantic::Pointer
+			}
 		},
 		clang::TypeKind::LValueReference => {
 			t = t.get_pointee_type().unwrap();
@@ -336,48 +445,75 @@ fn parse_type(mut t: clang::Type) -> Option<gdrs_obj::Type> {
 		_ => gdrs_obj::TypeSemantic::Value,
 	};
 
-	Some(gdrs_obj::Type{
-		is_const: t.is_const_qualified(),
-		semantic: semantic,
+	Some(gdrs_obj::TypeRef{
 		name: match t.get_kind() {
-			clang::TypeKind::Auto => { return None; }
+			clang::TypeKind::Auto | clang::TypeKind::Unexposed => { return None; }
 
-			clang::TypeKind::Bool => gdrs_obj::Typename::Bool,
-			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_obj::Typename::Char,
-			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::Typename::UChar,
-			clang::TypeKind::Short => gdrs_obj::Typename::Short,
-			clang::TypeKind::UShort => gdrs_obj::Typename::UShort,
-			clang::TypeKind::Int => gdrs_obj::Typename::Int,
-			clang::TypeKind::UInt => gdrs_obj::Typename::UInt,
-			clang::TypeKind::Long => gdrs_obj::Typename::Long,
-			clang::TypeKind::ULong => gdrs_obj::Typename::ULong,
-			clang::TypeKind::LongLong => gdrs_obj::Typename::LongLong,
-			clang::TypeKind::ULongLong => gdrs_obj::Typename::ULongLong,
-			clang::TypeKind::Float => gdrs_obj::Typename::Float,
-			clang::TypeKind::Double => gdrs_obj::Typename::Double,
-			clang::TypeKind::Enum => gdrs_obj::Typename::Enum(t.get_declaration().unwrap().get_name().unwrap()),
+			clang::TypeKind::Bool => gdrs_obj::TypeName::Bool,
+			clang::TypeKind::CharS | clang::TypeKind::SChar | clang::TypeKind::WChar => gdrs_obj::TypeName::Char,
+			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_obj::TypeName::UChar,
+			clang::TypeKind::Short => gdrs_obj::TypeName::Short,
+			clang::TypeKind::UShort => gdrs_obj::TypeName::UShort,
+			clang::TypeKind::Int => gdrs_obj::TypeName::Int,
+			clang::TypeKind::UInt => gdrs_obj::TypeName::UInt,
+			clang::TypeKind::Long => gdrs_obj::TypeName::Long,
+			clang::TypeKind::ULong => gdrs_obj::TypeName::ULong,
+			clang::TypeKind::LongLong => gdrs_obj::TypeName::LongLong,
+			clang::TypeKind::ULongLong => gdrs_obj::TypeName::ULongLong,
+			clang::TypeKind::Float => gdrs_obj::TypeName::Float,
+			clang::TypeKind::Double => gdrs_obj::TypeName::Double,
 
-			clang::TypeKind::Record => {
-				if let Some(params) = t.get_template_argument_types().map(|vp| vp.into_iter().map(|p| parse_type(p.unwrap())).collect::<Vec<_>>()) {
-					if let Some(i) = params.iter().position(|p| p.is_none()) {
-						println!("WARNING: Unsupported template param type: {:?}", t.get_template_argument_types().unwrap()[i]);
-						return None;
+			clang::TypeKind::Void if semantic != gdrs_obj::TypeSemantic::Value => gdrs_obj::TypeName::Void,
+
+			k if k == clang::TypeKind::Enum || k == clang::TypeKind::Typedef || k == clang::TypeKind::Record => {
+				let mut p = t.get_declaration().unwrap();
+				let mut name_path = Vec::new();
+				name_path.push(p.get_name().unwrap());
+				loop {
+					p = p.get_semantic_parent().unwrap();
+					match p.get_kind() {
+						clang::EntityKind::Namespace | clang::EntityKind::ClassDecl => {
+							if let Some(comp) = p.get_name() {
+								name_path.insert(0, comp);
+							} else {
+								let _ = writeln!(io::stderr(), "WARNING: Unsupported anonymous namespace");
+								return None;
+							}
+						},
+						_ => break,
 					}
+				}
 
-					gdrs_obj::Typename::Class(
-						t.get_declaration().unwrap().get_name().unwrap(),
-						Some(params.into_iter().map(|p| p.unwrap()).collect())
-					)
-				} else {
-					gdrs_obj::Typename::Class(t.get_declaration().unwrap().get_name().unwrap(), None)
+				match k {
+					clang::TypeKind::Enum | clang::TypeKind::Typedef => {
+						gdrs_obj::TypeName::TypeName(name_path)
+					},
+					clang::TypeKind::Record => {
+						if let Some(params) = t.get_template_argument_types().map(|vp| vp.into_iter().map(|p| parse_type(p.unwrap())).collect::<Vec<_>>()) {
+							if let Some(i) = params.iter().position(|p| p.is_none()) {
+								let _ = writeln!(io::stderr(), "WARNING: Unsupported template param type: {:?}", t.get_template_argument_types().unwrap()[i]);
+								return None;
+							}
+
+							gdrs_obj::TypeName::Class(
+								name_path,
+								params.into_iter().map(|p| p.unwrap()).collect()
+							)
+						} else {
+							gdrs_obj::TypeName::Class(name_path, Vec::with_capacity(0))
+						}
+					},
+					_ => unreachable!(),
 				}
 			},
 
 			k => {
-				println!("WARNING: Unsupported type kind: {:?}", k);
+				let _ = writeln!(io::stderr(), "WARNING: Unsupported type kind: {:?}", k);
 				return None;
 			},
 		},
+		semantic: semantic,
+		is_const: t.is_const_qualified(),
 	})
 }
 
@@ -393,10 +529,12 @@ fn parse_value(exp: clang::Entity) -> Option<gdrs_obj::Value> {
 				|| kind == clang::TypeKind::UInt
 				|| kind == clang::TypeKind::ULong
 				|| kind == clang::TypeKind::ULongLong
+				|| kind == clang::TypeKind::Bool
 			=> Some(gdrs_obj::Value::UInt(i as u64)),
 			clang::EvaluationResult::Integer(i)
 				if kind == clang::TypeKind::CharS
 				|| kind == clang::TypeKind::SChar
+				|| kind == clang::TypeKind::WChar
 				|| kind == clang::TypeKind::Short
 				|| kind == clang::TypeKind::Int
 				|| kind == clang::TypeKind::Long
@@ -406,7 +544,7 @@ fn parse_value(exp: clang::Entity) -> Option<gdrs_obj::Value> {
 			clang::EvaluationResult::Float(d) if kind == clang::TypeKind::Double => Some(gdrs_obj::Value::Double(d)),
 			clang::EvaluationResult::String(s) => Some(gdrs_obj::Value::String(s.to_string_lossy().into_owned())),
 			v => {
-				println!("WARNING: Unsupported evaluation result: {:?}", v);
+				let _ = writeln!(io::stderr(), "WARNING: Unsupported evaluation result `{:?}`: {:?}", v, exp);
 				return None;
 			},
 		}

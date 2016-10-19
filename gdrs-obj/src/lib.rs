@@ -7,20 +7,22 @@ extern crate serde_derive;
 
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Api {
+pub struct Namespace {
+	pub name: String,
 	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
-	pub aliases: Vec<Alias>,
+	pub aliases: Vec<TypeAlias>,
 	pub classes: Vec<Class>,
 	pub functions: Vec<Function>,
+	pub namespaces: Vec<Namespace>,
 }
 
 
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Const {
-	pub ty: Type,
 	pub name: String,
+	pub ty: TypeRef,
 	pub value: Value,
 }
 
@@ -29,7 +31,7 @@ pub struct Const {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Enum {
 	pub name: String,
-	pub underlying: Type,
+	pub underlying: TypeRef,
 	pub variants: Vec<Variant>,
 }
 
@@ -44,9 +46,9 @@ pub struct Variant {
 
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Alias {
+pub struct TypeAlias {
 	pub name: String,
-	pub ty: Type,
+	pub ty: TypeRef,
 }
 
 
@@ -55,16 +57,16 @@ pub struct Alias {
 pub struct Class {
 	pub include: String,
 	pub name: String,
-	pub aliases: Vec<Alias>,
 	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
+	pub aliases: Vec<TypeAlias>,
 	pub fields: Vec<Field>,
 	pub methods: Vec<Function>,
 }
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Access {
 	Public,
 	Protected,
@@ -72,7 +74,7 @@ pub enum Access {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FunctionSemantic {
 	Free,
 	Static,
@@ -82,10 +84,11 @@ pub enum FunctionSemantic {
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeSemantic {
 	Value,
 	Pointer,
+	DoublePointer,
 	Reference,
 	Array(usize),
 }
@@ -94,41 +97,42 @@ pub enum TypeSemantic {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Field {
+	pub name: String,
+	pub ty: TypeRef,
 	pub access: Access,
 	pub is_static: bool,
-	pub ty: Type,
-	pub name: String,
 }
 
 
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Function {
-	pub access: Access,
-	pub semantic: FunctionSemantic,
-	pub return_ty: Option<Type>,
 	pub name: String,
-	pub params: Option<Vec<Param>>,
+	pub params: Vec<Param>,
+	pub return_ty: Option<TypeRef>,
+	pub semantic: FunctionSemantic,
+	pub access: Access,
 	pub is_const: bool,
 }
 
 
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Type {
-	pub is_const: bool,
+pub struct TypeRef {
+	pub name: TypeName,
 	pub semantic: TypeSemantic,
-	pub name: Typename,
+	pub is_const: bool,
 }
 
 
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum Typename {
+pub enum TypeName {
 	Void,
 	Bool,
 	Char,
 	UChar,
+	WChar,
 	Short,
 	UShort,
 	Int,
@@ -139,22 +143,22 @@ pub enum Typename {
 	ULongLong,
 	Float,
 	Double,
-	Enum(String),
-	Class(String, Option<Vec<Type>>),
+	TypeName(Vec<String>),
+	Class(Vec<String>, Vec<TypeRef>),
 }
 
 
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Param {
-	pub ty: Type,
 	pub name: String,
+	pub ty: TypeRef,
 	pub default: Option<Value>,
 }
 
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
 	Int(i64),
 	UInt(u64),
