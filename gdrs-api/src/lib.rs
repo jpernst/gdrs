@@ -10,6 +10,7 @@ extern crate serde_derive;
 pub struct Namespace {
 	pub name: String,
 	pub consts: Vec<Const>,
+	pub globals: Vec<Global>,
 	pub enums: Vec<Enum>,
 	pub aliases: Vec<TypeAlias>,
 	pub classes: Vec<Class>,
@@ -24,6 +25,14 @@ pub struct Const {
 	pub name: String,
 	pub ty: TypeRef,
 	pub value: Value,
+}
+
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Global {
+	pub name: String,
+	pub ty: TypeRef,
 }
 
 

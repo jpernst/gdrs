@@ -86,6 +86,7 @@ fn main() {
 	let mut api = gdrs_api::Namespace{
 		name: "".to_string(),
 		consts: Vec::new(),
+		globals: Vec::new(),
 		enums: Vec::new(),
 		aliases: Vec::new(),
 		classes: Vec::new(),
@@ -134,6 +135,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 	let mut ns = gdrs_api::Namespace{
 		name: name.unwrap(),
 		consts: Vec::with_capacity(0),
+		globals: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
 		classes: Vec::with_capacity(0),
@@ -160,8 +162,17 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 							value: val,
 						})
 					}
-				} else {
-					let _ = writeln!(io::stderr(), "WARNING: Unsupported global variable `{}`: {:?}", c.get_name().unwrap(), c);
+				} else if c.get_storage_class() == Some(clang::StorageClass::Extern) {
+					match parse_type(c.get_type().unwrap()) {
+						Ok(ty) => ns.globals.push(gdrs_api::Global{
+							ty: ty,
+							name: c.get_name().unwrap(),
+						}),
+						Err(ParseError::Unsupported) => {
+							let _ = writeln!(io::stderr(), "WARNING: Unsupported extern global `{}`: {:?}", c.get_name().unwrap(), c);
+						},
+						_ => (),
+					}
 				}
 			},
 			clang::EntityKind::EnumDecl => {
@@ -216,11 +227,16 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 
 
 fn merge_namespace(dst: &mut gdrs_api::Namespace, src: gdrs_api::Namespace) {
-	let gdrs_api::Namespace{name: _, consts, enums, aliases, classes, functions, namespaces} = src;
+	let gdrs_api::Namespace{name: _, consts, globals, enums, aliases, classes, functions, namespaces} = src;
 
 	for sc in consts.into_iter() {
 		if !dst.consts.iter().any(|dc| dc.name == sc.name) {
 			dst.consts.push(sc);
+		}
+	}
+	for sg in globals.into_iter() {
+		if !dst.globals.iter().any(|dg| dg.name == sg.name) {
+			dst.globals.push(sg);
 		}
 	}
 	for se in enums.into_iter() {
