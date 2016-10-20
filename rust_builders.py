@@ -30,7 +30,15 @@ def add_rust_builders(env):
 
 
 
-	def scan_cargo_toml(manifest_path, source):
+	def scan_cargo_toml(node, env):
+		source = []
+		if os.path.basename(node.abspath) == "Cargo.toml":
+			scan_cargo_toml(node.abspath, source)
+		source
+
+
+
+	def scan_cargo_toml_impl(manifest_path, source):
 		cargo_lock_path = os.path.join(os.path.dirname(manifest_path), "Cargo.lock")
 		if os.path.exists(cargo_lock_path):
 			source.append(cargo_lock_path)
@@ -46,7 +54,7 @@ def add_rust_builders(env):
 					if isinstance(dep, dict) and "path" in dep:
 						dep_manifest_path = os.path.join(os.path.dirname(manifest_path), dep["path"], "Cargo.toml")
 						source.append(dep_manifest_path)
-						scan_cargo_toml(dep_manifest_path, source)
+						scan_cargo_toml_impl(dep_manifest_path, source)
 
 
 
@@ -55,8 +63,6 @@ def add_rust_builders(env):
 			raise AssertionError("cargo_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
 		if len(target) != 1:
 			raise AssertionError("cargo_emitter: only one `target` allowed")
-
-		scan_cargo_toml(source[1].abspath, source)
 
 		target = [os.path.join(
 			os.path.dirname(target[0].abspath),
@@ -122,6 +128,7 @@ def add_rust_builders(env):
 
 
 
+	env.Append(SCANNERS = Scanner(scan_cargo_toml))
 	env["BUILDERS"]["_RustcVersion"] = Builder(
 		action = write_rustc_version)
 	env["BUILDERS"]["_RustStaticLib"] = Builder(
