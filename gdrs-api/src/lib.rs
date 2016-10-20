@@ -13,8 +13,8 @@ pub struct Namespace {
 	pub globals: Vec<Global>,
 	pub enums: Vec<Enum>,
 	pub aliases: Vec<TypeAlias>,
-	pub classes: Vec<Class>,
 	pub functions: Vec<Function>,
+	pub classes: Vec<Class>,
 	pub namespaces: Vec<Namespace>,
 }
 
@@ -66,11 +66,16 @@ pub struct TypeAlias {
 pub struct Class {
 	pub include: String,
 	pub name: String,
+	pub inherits: Option<TypeName>,
+	pub is_pod: bool,
 	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
 	pub aliases: Vec<TypeAlias>,
 	pub fields: Vec<Field>,
+	pub ctors: Vec<Function>,
 	pub methods: Vec<Function>,
+	pub virtual_dtor: bool,
+	pub classes: Vec<Class>,
 }
 
 

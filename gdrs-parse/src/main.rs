@@ -89,8 +89,8 @@ fn main() {
 		globals: Vec::new(),
 		enums: Vec::new(),
 		aliases: Vec::new(),
-		classes: Vec::new(),
 		functions: Vec::new(),
+		classes: Vec::new(),
 		namespaces: Vec::new(),
 	};
 
@@ -138,8 +138,8 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 		globals: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
-		classes: Vec::with_capacity(0),
 		functions: Vec::with_capacity(0),
+		classes: Vec::with_capacity(0),
 		namespaces: Vec::with_capacity(0),
 	};
 
@@ -169,7 +169,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 							name: c.get_name().unwrap(),
 						}),
 						Err(ParseError::Unsupported) => {
-							let _ = writeln!(io::stderr(), "WARNING: Unsupported extern global `{}`: {:?}", c.get_name().unwrap(), c);
+							let _ = writeln!(io::stderr(), "WARNING: Unsupported extern global type `{}`: {:?}", c.get_name().unwrap(), c);
 						},
 						_ => (),
 					}
@@ -195,10 +195,10 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 					ns.aliases.push(alias);
 				}
 			},
-			clang::EntityKind::ClassDecl => {
-				let mut class = parse_class(c);
-				class.include = loc.to_string_lossy().into_owned();
-				ns.classes.push(class);
+			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
+				if let Some(class) = parse_class(c, loc.to_string_lossy().into_owned()) {
+					ns.classes.push(class);
+				}
 			},
 			clang::EntityKind::FunctionDecl => {
 				if let Some(func) = parse_function(c) {
@@ -249,14 +249,14 @@ fn merge_namespace(dst: &mut gdrs_api::Namespace, src: gdrs_api::Namespace) {
 			dst.aliases.push(sa);
 		}
 	}
-	for sc in classes.into_iter() {
-		if !dst.classes.iter().any(|dc| dc.name == sc.name) {
-			dst.classes.push(sc);
-		}
-	}
 	for sf in functions.into_iter() {
 		if !dst.functions.iter().any(|df| df.name == sf.name) {
 			dst.functions.push(sf);
+		}
+	}
+	for sc in classes.into_iter() {
+		if !dst.classes.iter().any(|dc| dc.name == sc.name) {
+			dst.classes.push(sc);
 		}
 	}
 	for sn in namespaces.into_iter() {
@@ -306,7 +306,7 @@ fn parse_alias(e: clang::Entity) -> Option<gdrs_api::TypeAlias> {
 			ty: ty,
 		}),
 		Err(ParseError::Unsupported) => {
-			let _ = writeln!(io::stderr(), "WARNING: Unsupported type alias `{}`: {:?}", e.get_name().unwrap(), e);
+			let _ = writeln!(io::stderr(), "WARNING: Unsupported alias type `{}`: {:?}", e.get_name().unwrap(), e);
 			None
 		},
 		Err(ParseError::Ignored) => None,
@@ -315,24 +315,60 @@ fn parse_alias(e: clang::Entity) -> Option<gdrs_api::TypeAlias> {
 
 
 
-fn parse_class(e: clang::Entity) -> gdrs_api::Class {
+fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
+	if !e.is_definition() {
+		return None;
+	}
+	if e.get_template().is_some() {
+		return None;
+	}
+
 	let mut class = gdrs_api::Class{
-		include: String::new(),
+		include: loc.clone(),
 		name: e.get_name().unwrap(),
+		inherits: None,
+		is_pod: e.get_type().unwrap().is_pod(),
 		consts: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
 		fields: Vec::with_capacity(0),
+		ctors: Vec::with_capacity(0),
 		methods: Vec::with_capacity(0),
+		virtual_dtor: false,
+		classes: Vec::with_capacity(0),
 	};
 
 	e.visit_children(|c, _| {
-		let access = c.get_accessibility().unwrap();
-		if access == clang::Accessibility::Private {
-			return clang::EntityVisitResult::Continue
-		}
+		let access = match c.get_accessibility() {
+			Some(clang::Accessibility::Private) => {
+				if class.is_pod && c.get_kind() == clang::EntityKind::FieldDecl {
+					let _ = writeln!(io::stderr(), "WARNING: Private POD field `{:?}`: {:?}", c, e);
+					class.is_pod = false;
+				}
+				return clang::EntityVisitResult::Continue;
+			},
+			Some(a) => a,
+			None => return clang::EntityVisitResult::Continue,
+		};
 
 		match c.get_kind() {
+			clang::EntityKind::BaseSpecifier => {
+				if access == clang::Accessibility::Public {
+					if class.inherits.is_some() {
+						let _ = writeln!(io::stderr(), "WARNING: Multiple inheritance `{:?}`: {:?}", c, e);
+					} else {
+						match parse_type(c.get_type().unwrap()) {
+							Ok(t) => class.inherits = Some(t.name),
+							Err(ParseError::Unsupported) => {
+								let _ = writeln!(io::stderr(), "WARNING: Unsupported base type `{:?}`: {:?}", c, e);
+							},
+							Err(ParseError::Ignored) => (),
+						}
+					}
+				} else {
+					let _ = writeln!(io::stderr(), "WARNING: Non-public inheritance `{:?}`: {:?}", c, e);
+				}
+			},
 			clang::EntityKind::EnumDecl => {
 				let _enum = parse_enum(&c);
 				if _enum.name == "const" {
@@ -366,7 +402,7 @@ fn parse_class(e: clang::Entity) -> gdrs_api::Class {
 					let ty = match parse_type(c.get_type().unwrap()) {
 						Ok(ty) => ty,
 						Err(ParseError::Unsupported) => {
-							let _ = writeln!(io::stderr(), "WARNING: Unsupported field `{:?}`: {:?}", c.get_type().unwrap(), c);
+							let _ = writeln!(io::stderr(), "WARNING: Unsupported field type `{:?}`: {:?}", c.get_type().unwrap(), c);
 							return clang::EntityVisitResult::Continue;
 						},
 						Err(ParseError::Ignored) => return clang::EntityVisitResult::Continue,
@@ -380,9 +416,24 @@ fn parse_class(e: clang::Entity) -> gdrs_api::Class {
 					});
 				}
 			},
+			clang::EntityKind::Constructor => {
+				if let Some(ctor) = parse_function(c) {
+					class.ctors.push(ctor);
+				}
+			},
 			clang::EntityKind::Method => {
 				if let Some(method) = parse_function(c) {
 					class.methods.push(method);
+				}
+			},
+			clang::EntityKind::Destructor => {
+				if c.is_virtual_method() {
+					class.virtual_dtor = true;
+				}
+			},
+			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
+				if let Some(nested) = parse_class(c, loc.clone()) {
+					class.classes.push(nested);
 				}
 			},
 			_ => (),
@@ -391,7 +442,7 @@ fn parse_class(e: clang::Entity) -> gdrs_api::Class {
 		clang::EntityVisitResult::Continue
 	});
 
-	class
+	Some(class)
 }
 
 
@@ -410,7 +461,7 @@ fn parse_function(e: clang::Entity) -> Option<gdrs_api::Function> {
 				if let Some(i) = params.iter().position(|&(ref p, _, _)| p.is_err()) {
 					let param = e.get_arguments().unwrap()[i];
 					if params[i].0.as_ref().unwrap_err() == &ParseError::Unsupported {
-						let _ = writeln!(io::stderr(), "WARNING: Unsupported param `{:?}`: {:?}", param, e);
+						let _ = writeln!(io::stderr(), "WARNING: Unsupported param type `{:?}`: {:?}", param, e);
 					}
 					return None;
 				}
@@ -428,7 +479,7 @@ fn parse_function(e: clang::Entity) -> Option<gdrs_api::Function> {
 			match parse_type(result) {
 				Ok(r) => Some(r),
 				Err(ParseError::Unsupported) => {
-					let _ = writeln!(io::stderr(), "WARNING: Unsupported return `{:?}`: {:?}", result, e);
+					let _ = writeln!(io::stderr(), "WARNING: Unsupported return type `{:?}`: {:?}", result, e);
 					return None;
 				},
 				_ => return None,
@@ -521,7 +572,7 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 							if let Some(comp) = p.get_name() {
 								name_path.insert(0, comp);
 							} else {
-								let _ = writeln!(io::stderr(), "WARNING: Unsupported anonymous namespace");
+								let _ = writeln!(io::stderr(), "WARNING: Anonymous namespace");
 								return Err(ParseError::Ignored);
 							}
 						},
