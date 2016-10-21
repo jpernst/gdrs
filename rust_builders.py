@@ -17,13 +17,6 @@ def add_rust_builders(env):
 
 
 
-	def rustc_version(env):
-		target = env._RustcVersion("rustc-version", [])
-		AlwaysBuild(target)
-		return target
-
-
-
 	def write_rustc_version(target, source, env):
 		with open(target[0].abspath, "wb") as dest:
 			dest.write(env["RUSTC_VERSION"])
@@ -33,19 +26,19 @@ def add_rust_builders(env):
 	def scan_cargo_toml(node, env):
 		source = []
 		if os.path.basename(node.abspath) == "Cargo.toml":
-			scan_cargo_toml(node.abspath, source)
-		source
+			scan_cargo_toml_impl(node.abspath, source)
+		return source
 
 
 
 	def scan_cargo_toml_impl(manifest_path, source):
 		cargo_lock_path = os.path.join(os.path.dirname(manifest_path), "Cargo.lock")
 		if os.path.exists(cargo_lock_path):
-			source.append(cargo_lock_path)
+			source.append(File(cargo_lock_path))
 
 		for root, dirnames, filenames in os.walk(os.path.dirname(manifest_path)):
 			for filename in fnmatch.filter(filenames, '*.rs'):
-				source.append(os.path.join(root, filename))
+				source.append(File(os.path.join(root, filename)))
 
 		manifest = toml.load(manifest_path)
 		for section in ["dependencies", "build-dependencies"]:
@@ -53,17 +46,50 @@ def add_rust_builders(env):
 				for _, dep in manifest[section].iteritems():
 					if isinstance(dep, dict) and "path" in dep:
 						dep_manifest_path = os.path.join(os.path.dirname(manifest_path), dep["path"], "Cargo.toml")
-						source.append(dep_manifest_path)
+						source.append(File(dep_manifest_path))
 						scan_cargo_toml_impl(dep_manifest_path, source)
 
 
 
-	def rust_emitter(target, source, env):
+	def rust_program_emitter(target, source, env):
 		if len(source) != 2 or os.path.basename(source[0].abspath) != "rustc-version" or os.path.basename(source[1].abspath) != "Cargo.toml":
-			raise AssertionError("cargo_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
+			raise AssertionError("rust_program_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
 		if len(target) != 1:
-			raise AssertionError("cargo_emitter: only one `target` allowed")
+			raise AssertionError("rust_program_emitter: only one `target` allowed")
 
+		source.extend(scan_cargo_toml(source[1], env))
+		target = [File(os.path.join(
+			os.path.dirname(target[0].abspath),
+			os.path.splitext(os.path.basename(target[0].abspath))[0] + env["PROGSUFFIX"]
+		))]
+
+		return target, source
+
+
+
+	def rust_program_generator(source, target, env, for_signature):
+		if env["target"] == "release" or env["target"] == "release_debug":
+			actions = ["cargo build -q --manifest-path={} --release".format(source[1].abspath)]
+			profile = "release"
+		else:
+			actions = ["cargo build -q --manifest-path={}".format(source[1].abspath)]
+			profile = "debug"
+
+		crate_name = toml.load(source[1].abspath)["package"]["name"]
+
+		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(source[1].abspath), "target", profile, crate_name)))
+
+		return actions
+
+
+
+	def rust_staticlib_emitter(target, source, env):
+		if len(source) != 2 or os.path.basename(source[0].abspath) != "rustc-version" or os.path.basename(source[1].abspath) != "Cargo.toml":
+			raise AssertionError("rust_staticlib_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
+		if len(target) != 1:
+			raise AssertionError("rust_staticlib_emitter: only one `target` allowed")
+
+		source.extend(scan_cargo_toml(source[1], env))
 		target = [os.path.join(
 			os.path.dirname(target[0].abspath),
 			os.path.splitext(os.path.basename(target[0].abspath))[0] + env["LIBSUFFIX"])]
@@ -89,7 +115,7 @@ def add_rust_builders(env):
 
 
 	def rust_godot_module_emitter(target, source, env):
-		target, source = rust_emitter(target, source, env)
+		target, source = rust_staticlib_emitter(target, source, env)
 
 		target.append(os.path.join(os.path.dirname(target[0]), "gdrs-macros.cpp"))
 
@@ -117,27 +143,32 @@ def add_rust_builders(env):
 
 
 
-	def rust_staticlib(env, target):
-		return env._RustStaticLib(target, [env.RustcVersion(), "Cargo.toml"])
+	env.Append(
+		SCANNERS = [Scanner(scan_cargo_toml)],
+		BUILDERS = {
+			"_RustcVersion": Builder(action = write_rustc_version),
+			"_RustProgram": Builder(emitter = rust_program_emitter, generator = rust_program_generator),
+			"_RustStaticLib": Builder(emitter = rust_staticlib_emitter, generator = rust_staticlib_generator),
+			"_RustGodotModule": Builder(emitter = rust_godot_module_emitter, generator = rust_godot_module_generator)
+		}
+	)
 
+	def rustc_version(env):
+		target = env._RustcVersion("rustc-version", [])
+		AlwaysBuild(target)
+		return target
 
+	def rust_program(env, target, root = "."):
+		return env._RustProgramLib(target, [env.RustcVersion(), os.path.normpath(os.path.join(root, "Cargo.toml"))])
 
-	def rust_godot_module(env, target):
+	def rust_staticlib(env, target, root = "."):
+		return env._RustStaticLib(target, [env.RustcVersion(), os.path.normpath(os.path.join(root, "Cargo.toml"))])
+
+	def rust_godot_module(env, target, root = "."):
 		mod_env = env.Clone()
-		return mod_env._RustGodotModule(target, [env.RustcVersion(), "Cargo.toml"])
-
-
-
-	env.Append(SCANNERS = Scanner(scan_cargo_toml))
-	env["BUILDERS"]["_RustcVersion"] = Builder(
-		action = write_rustc_version)
-	env["BUILDERS"]["_RustStaticLib"] = Builder(
-		emitter = rust_emitter,
-		generator = rust_staticlib_generator)
-	env["BUILDERS"]["_RustGodotModule"] = Builder(
-		emitter = rust_godot_module_emitter,
-		generator = rust_godot_module_generator)
+		return mod_env._RustGodotModule(target, [env.RustcVersion(), os.path.normpath(os.path.join(root, "Cargo.toml"))])
 
 	env.AddMethod(rustc_version, "RustcVersion")
+	env.AddMethod(rust_program, "RustProgram")
 	env.AddMethod(rust_staticlib, "RustStaticLib")
 	env.AddMethod(rust_godot_module, "RustGodotModule")
