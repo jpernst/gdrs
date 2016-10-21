@@ -18,15 +18,15 @@ def add_rust_builders(env):
 
 
 	def write_rustc_version(target, source, env):
-		with open(target[0].abspath, "wb") as dest:
+		with open(str(target[0]), "wb") as dest:
 			dest.write(env["RUSTC_VERSION"])
 
 
 
 	def scan_cargo_toml(node, env):
 		source = []
-		if os.path.basename(node.abspath) == "Cargo.toml":
-			scan_cargo_toml_impl(node.abspath, source)
+		if os.path.basename(str(node)) == "Cargo.toml":
+			scan_cargo_toml_impl(str(node), source)
 		return source
 
 
@@ -52,15 +52,15 @@ def add_rust_builders(env):
 
 
 	def rust_program_emitter(target, source, env):
-		if len(source) != 2 or os.path.basename(source[0].abspath) != "rustc-version" or os.path.basename(source[1].abspath) != "Cargo.toml":
+		if len(source) != 2 or os.path.basename(str(source[0])) != "rustc-version" or os.path.basename(str(source[1])) != "Cargo.toml":
 			raise AssertionError("rust_program_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
 		if len(target) != 1:
 			raise AssertionError("rust_program_emitter: only one `target` allowed")
 
 		source.extend(scan_cargo_toml(source[1], env))
 		target = [File(os.path.join(
-			os.path.dirname(target[0].abspath),
-			os.path.splitext(os.path.basename(target[0].abspath))[0] + env["PROGSUFFIX"]
+			os.path.dirname(str(target[0])),
+			os.path.splitext(os.path.basename(str(target[0])))[0] + env["PROGSUFFIX"]
 		))]
 
 		return target, source
@@ -69,30 +69,30 @@ def add_rust_builders(env):
 
 	def rust_program_generator(source, target, env, for_signature):
 		if env["target"] == "release" or env["target"] == "release_debug":
-			actions = ["cargo build -q --manifest-path={} --release".format(source[1].abspath)]
+			actions = ["cargo build -q --manifest-path={} --release".format(str(source[1]))]
 			profile = "release"
 		else:
-			actions = ["cargo build -q --manifest-path={}".format(source[1].abspath)]
+			actions = ["cargo build -q --manifest-path={}".format(str(source[1]))]
 			profile = "debug"
 
-		crate_name = toml.load(source[1].abspath)["package"]["name"]
+		crate_name = toml.load(str(source[1]))["package"]["name"]
 
-		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(source[1].abspath), "target", profile, crate_name)))
+		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(str(source[1])), "target", profile, crate_name)))
 
 		return actions
 
 
 
 	def rust_staticlib_emitter(target, source, env):
-		if len(source) != 2 or os.path.basename(source[0].abspath) != "rustc-version" or os.path.basename(source[1].abspath) != "Cargo.toml":
+		if len(source) != 2 or os.path.basename(str(source[0])) != "rustc-version" or os.path.basename(str(source[1])) != "Cargo.toml":
 			raise AssertionError("rust_staticlib_emitter: `source` must be [`rustc-version`, `Cargo.toml`]")
 		if len(target) != 1:
 			raise AssertionError("rust_staticlib_emitter: only one `target` allowed")
 
 		source.extend(scan_cargo_toml(source[1], env))
 		target = [os.path.join(
-			os.path.dirname(target[0].abspath),
-			os.path.splitext(os.path.basename(target[0].abspath))[0] + env["LIBSUFFIX"])]
+			os.path.dirname(str(target[0])),
+			os.path.splitext(os.path.basename(str(target[0])))[0] + env["LIBSUFFIX"])]
 
 		return target, source
 
@@ -100,15 +100,15 @@ def add_rust_builders(env):
 
 	def rust_staticlib_generator(source, target, env, for_signature):
 		if env["target"] == "release" or env["target"] == "release_debug":
-			actions = ["cargo build -q --manifest-path={} --release".format(source[1].abspath)]
+			actions = ["cargo build -q --manifest-path={} --release".format(str(source[1]))]
 			profile = "release"
 		else:
-			actions = ["cargo build -q --manifest-path={}".format(source[1].abspath)]
+			actions = ["cargo build -q --manifest-path={}".format(str(source[1]))]
 			profile = "debug"
 
-		crate_name = toml.load(source[1].abspath)["package"]["name"].replace("-", "_")
+		crate_name = toml.load(str(source[1]))["package"]["name"].replace("-", "_")
 
-		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(source[1].abspath), "target", profile, "lib{}.a".format(crate_name))))
+		actions.append(Copy("$TARGET", os.path.join(os.path.dirname(str(source[1])), "target", profile, "lib{}.a".format(crate_name))))
 
 		return actions
 
@@ -124,7 +124,7 @@ def add_rust_builders(env):
 
 
 	def concat_macros_cpp(target, source, env):
-		with open(os.path.join(os.path.dirname(target[0].abspath), "gdrs-macros.cpp"), "wb") as dest:
+		with open(os.path.join(os.path.dirname(str(target[0])), "gdrs-macros.cpp"), "wb") as dest:
 			for filename in glob.iglob(os.path.join(env["ENV"]["GDRS_MACROS_CPP_DIR"], "*.cpp")):
 				with open(filename, "rb") as src:
 					shutil.copyfileobj(src, dest)
@@ -132,7 +132,7 @@ def add_rust_builders(env):
 
 
 	def rust_godot_module_generator(source, target, env, for_signature):
-		gdrs_macros_cpp_dir = os.path.join(os.path.dirname(source[-1].abspath), "gdrs-macros.cpp.d")
+		gdrs_macros_cpp_dir = os.path.join(os.path.dirname(str(source[-1])), "gdrs-macros.cpp.d")
 		env["ENV"]["GDRS_MACROS_CPP_DIR"] = gdrs_macros_cpp_dir
 
 		return [
