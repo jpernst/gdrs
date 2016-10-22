@@ -1,9 +1,10 @@
-/gdrs-host/rustc-version
+!bin/
 target/
 .cargo/
 Cargo.lock
-gdrs-macros.cpp
-gdrs-macros.cpp.d/
+rustc-version
+gdrs-macros.d/
+*.macros.cpp
 *.o
 *.a
 *.pyc

@@ -1,8 +1,15 @@
+import os
 from rust_builders import add_rust_builders
 
 Import('env')
-
-env.add_source_files(env.modules_sources, "*.cpp")
-
 add_rust_builders(env)
-SConscript("gdrs-host/SCsub")
+rustc_version = env.RustcVersion()
+
+parse = env.RustProgram("#bin/gdrs-parse", "gdrs-parse", [rustc_version])
+[host, host_macros] = env.RustGodotModule("libgdrs-host", "gdrs-host", [rustc_version])
+
+env.Append(
+	LINKFLAGS = ["-Wl,--whole-archive,-L{},-l:{},--no-whole-archive".format(os.path.relpath(os.path.dirname(host.abspath), Dir("#").abspath), str(host))],
+	LIBS = [host, "dl", "pthread", "gcc_s", "c", "m", "rt", "util"])
+
+env.modules_sources.extend([env.Object("register_types.cpp"), env.Object("gdrs-alloc.cpp"), env.Object(host_macros)])
