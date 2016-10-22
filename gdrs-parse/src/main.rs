@@ -10,7 +10,6 @@ extern crate docopt;
 extern crate rustc_serialize;
 extern crate toml;
 extern crate gdrs_api;
-extern crate glob;
 
 use std::env;
 use std::fs;
@@ -25,14 +24,14 @@ const USAGE: &'static str = r#"
 Parse Godot source and generate JSON API description.
 
 Usage:
-	gdrs-parse [-o <output>] [-I <include> | -D <define>]... <file>...
+	gdrs-parse [options] <file>...
 	gdrs-parse --help
 
 Options:
-	-I <include>  Add an #include search path
-	-D <define>   Define a preprocessor symbol
-	-o <output>   Output file [default: -]
-	-h, --help    Show this message
+	-o OUTPUT         Output file [default: -]
+	-D DEFINE ...     Define a preprocessor symbol
+	-I INCLUDE ...    Add an #include search path
+	-h, --help        Show this message
 "#;
 
 
@@ -79,10 +78,6 @@ fn main() {
 		(output, flags, files)
 	};
 
-	let c = clang::Clang::new().unwrap();
-
-	let mut index = clang::Index::new(&c, true, false);
-	index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
 	let mut api = gdrs_api::Namespace{
 		name: "".to_string(),
 		consts: Vec::new(),
@@ -94,25 +89,22 @@ fn main() {
 		namespaces: Vec::new(),
 	};
 
-	let mut tus = Vec::new();
-	for file_pat in &files {
-		for file in glob::glob(file_pat).unwrap() {
-			let file = file.unwrap();
+	for file in &files {
+		println!("PARSING: {}", file);
 
-			let mut parser = index.parser(file);
-			parser.arguments(&flags);
-			//let parser = parser.detailed_preprocessing_record(true);
-			let parser = parser.skip_function_bodies(true);
+		let c = clang::Clang::new().unwrap();
+		let mut index = clang::Index::new(&c, true, false);
+		index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
 
-			let tu = parser.parse().unwrap();
-			if let Some(ns) = parse_namespace(tu.get_entity()) {
-				tus.push(ns);
-			}
+		let mut parser = index.parser(file);
+		parser.arguments(&flags);
+		//let parser = parser.detailed_preprocessing_record(true);
+		let parser = parser.skip_function_bodies(true);
+
+		let tu = parser.parse().unwrap();
+		if let Some(ns) = parse_namespace(tu.get_entity()) {
+			merge_namespace(&mut api, ns);
 		}
-	}
-
-	for tu in tus.into_iter() {
-		merge_namespace(&mut api, tu);
 	}
 
 	let json = serde_json::to_string_pretty(&api).unwrap();
@@ -151,6 +143,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 		if loc.extension() == Some(OsStr::new("cpp")) || loc.components().any(|c| c == path::Component::Normal(OsStr::new("thirdparty"))) {
 			return clang::EntityVisitResult::Continue;
 		}
+		let loc = loc.to_string_lossy().into_owned();
 
 		match c.get_kind() {
 			clang::EntityKind::VarDecl => {
@@ -177,7 +170,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 			},
 			clang::EntityKind::EnumDecl => {
 				let _enum = parse_enum(&c);
-				if _enum.name == "const" {
+				if _enum.name == "auto" {
 					let gdrs_api::Enum{variants, underlying, ..} = _enum;
 					for v in variants.into_iter() {
 						ns.consts.push(gdrs_api::Const{
@@ -191,13 +184,32 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 				}
 			},
 			clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
-				if let Some(alias) = parse_alias(c) {
-					ns.aliases.push(alias);
+				if let Some(underlying) = c.get_typedef_underlying_type().unwrap().get_declaration() {
+					if underlying.get_name().is_none() {
+						match underlying.get_kind() {
+							clang::EntityKind::EnumDecl => {
+								let mut _enum = parse_enum(&underlying);
+								_enum.name = c.get_name().unwrap();
+								ns.enums.push(_enum);
+							},
+							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
+								if let Some(mut class) = parse_class(underlying, loc) {
+									class.name = c.get_name().unwrap();
+									ns.classes.push(class);
+								}
+							},
+							_ => (),
+						}
+					} else if let Some(alias) = parse_alias(c) {
+						ns.aliases.push(alias);
+					}
 				}
 			},
 			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
-				if let Some(class) = parse_class(c, loc.to_string_lossy().into_owned()) {
-					ns.classes.push(class);
+				if let Some(class) = parse_class(c, loc) {
+					if class.name != "auto" {
+						ns.classes.push(class);
+					}
 				}
 			},
 			clang::EntityKind::FunctionDecl => {
@@ -274,7 +286,7 @@ fn merge_namespace(dst: &mut gdrs_api::Namespace, src: gdrs_api::Namespace) {
 fn parse_enum(e: &clang::Entity) -> gdrs_api::Enum {
 	let underlying = parse_type(e.get_enum_underlying_type().unwrap()).unwrap();
 	let mut _enum = gdrs_api::Enum{
-		name: e.get_name().unwrap_or_else(|| "const".to_string()),
+		name: e.get_name().unwrap_or_else(|| "auto".to_string()),
 		underlying: underlying.clone(),
 		variants: Vec::new(),
 	};
@@ -316,16 +328,13 @@ fn parse_alias(e: clang::Entity) -> Option<gdrs_api::TypeAlias> {
 
 
 fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
-	if !e.is_definition() {
-		return None;
-	}
-	if e.get_template().is_some() {
+	if !e.is_definition() || e.get_template().is_some() {
 		return None;
 	}
 
 	let mut class = gdrs_api::Class{
 		include: loc.clone(),
-		name: e.get_name().unwrap(),
+		name: e.get_name().unwrap_or_else(|| "auto".to_string()),
 		inherits: None,
 		is_pod: e.get_type().unwrap().is_pod(),
 		consts: Vec::with_capacity(0),
@@ -371,7 +380,7 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 			},
 			clang::EntityKind::EnumDecl => {
 				let _enum = parse_enum(&c);
-				if _enum.name == "const" {
+				if _enum.name == "auto" {
 					let gdrs_api::Enum{variants, ..} = _enum;
 					for v in variants.into_iter() {
 						class.consts.push(gdrs_api::Const{
@@ -385,8 +394,25 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 				}
 			},
 			clang::EntityKind::TypeAliasDecl | clang::EntityKind::TypedefDecl => {
-				if let Some(alias) = parse_alias(c) {
-					class.aliases.push(alias);
+				if let Some(underlying) = c.get_typedef_underlying_type().unwrap().get_declaration() {
+					if underlying.get_name().is_none() {
+						match underlying.get_kind() {
+							clang::EntityKind::EnumDecl => {
+								let mut _enum = parse_enum(&underlying);
+								_enum.name = c.get_name().unwrap();
+								class.enums.push(_enum);
+							},
+							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
+								if let Some(mut nested) = parse_class(underlying, loc.clone()) {
+									nested.name = c.get_name().unwrap();
+									class.classes.push(nested);
+								}
+							},
+							_ => (),
+						}
+					} else if let Some(alias) = parse_alias(c) {
+						class.aliases.push(alias);
+					}
 				}
 			},
 			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
@@ -433,7 +459,9 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 			},
 			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
 				if let Some(nested) = parse_class(c, loc.clone()) {
-					class.classes.push(nested);
+					if nested.name != "auto" {
+						class.classes.push(nested);
+					}
 				}
 			},
 			_ => (),
@@ -564,19 +592,16 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 			k if k == clang::TypeKind::Enum || k == clang::TypeKind::Typedef || k == clang::TypeKind::Record => {
 				let mut p = t.get_declaration().unwrap();
 				let mut name_path = Vec::new();
-				name_path.push(p.get_name().unwrap());
 				loop {
+					if let Some(comp) = p.get_name() {
+						name_path.insert(0, comp);
+					} else {
+						let _ = writeln!(io::stderr(), "WARNING: Anonymous parent");
+						return Err(ParseError::Ignored);
+					}
 					p = p.get_semantic_parent().unwrap();
-					match p.get_kind() {
-						clang::EntityKind::Namespace | clang::EntityKind::ClassDecl => {
-							if let Some(comp) = p.get_name() {
-								name_path.insert(0, comp);
-							} else {
-								let _ = writeln!(io::stderr(), "WARNING: Anonymous namespace");
-								return Err(ParseError::Ignored);
-							}
-						},
-						_ => break,
+					if p.get_kind() == clang::EntityKind::TranslationUnit {
+						break;
 					}
 				}
 
