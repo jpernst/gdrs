@@ -1,14 +1,16 @@
 #![feature(proc_macro, custom_derive)]
 
 extern crate serde;
+extern crate docopt;
+extern crate tempdir;
+extern crate clang;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-extern crate clang;
-extern crate docopt;
 #[macro_use]
 extern crate rustc_serialize;
 extern crate toml;
+
 extern crate gdrs_api;
 
 use std::env;
@@ -17,6 +19,7 @@ use std::path;
 use std::io::{self, Write};
 use std::ffi::OsStr;
 use docopt::Docopt;
+use tempdir::TempDir;
 
 
 
@@ -48,8 +51,8 @@ enum ParseError {
 #[allow(non_snake_case)]
 struct Args {
 	pub flag_o: String,
-	pub flag_I: Option<Vec<String>>,
 	pub flag_D: Option<Vec<String>>,
+	pub flag_I: Option<Vec<String>>,
 	pub flag_help: bool,
 	pub arg_file: Vec<String>,
 }
@@ -68,44 +71,36 @@ fn main() {
 		}
 
 		let mut flags = vec!["-xc++".to_string()];
-		if let Some(includes) = includes {
-			flags.extend(includes.into_iter().map(|i| format!("-I{}", i)));
-		}
 		if let Some(defines) = defines {
 			flags.extend(defines.into_iter().map(|d| format!("-D{}", d)));
+		}
+		if let Some(includes) = includes {
+			flags.extend(includes.into_iter().map(|i| format!("-I{}", i)));
 		}
 
 		(output, flags, files)
 	};
 
-	let mut api = gdrs_api::Namespace{
-		name: "".to_string(),
-		consts: Vec::new(),
-		globals: Vec::new(),
-		enums: Vec::new(),
-		aliases: Vec::new(),
-		functions: Vec::new(),
-		classes: Vec::new(),
-		namespaces: Vec::new(),
-	};
-
-	for file in &files {
-		println!("PARSING: {}", file);
-
-		let c = clang::Clang::new().unwrap();
-		let mut index = clang::Index::new(&c, true, false);
-		index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
-
-		let mut parser = index.parser(file);
-		parser.arguments(&flags);
-		//let parser = parser.detailed_preprocessing_record(true);
-		let parser = parser.skip_function_bodies(true);
-
-		let tu = parser.parse().unwrap();
-		if let Some(ns) = parse_namespace(tu.get_entity()) {
-			merge_namespace(&mut api, ns);
+	let tmp_dir = TempDir::new("gdrs-parse").unwrap();
+	let unity_path = tmp_dir.path().join("unity.cpp");
+	{
+		let mut unity = fs::File::create(&unity_path).unwrap();
+		for file in &files {
+			writeln!(unity, r#"#include "{}""#, file).unwrap();
 		}
 	}
+
+	let c = clang::Clang::new().unwrap();
+	let mut index = clang::Index::new(&c, true, false);
+	index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
+
+	let mut parser = index.parser(unity_path);
+	parser.arguments(&flags);
+	//let parser = parser.detailed_preprocessing_record(true);
+	let parser = parser.skip_function_bodies(true);
+
+	let mut api = parse_namespace(parser.parse().unwrap().get_entity()).unwrap();
+	api.name = "".to_string();
 
 	let json = serde_json::to_string_pretty(&api).unwrap();
 	if output == "-" {
@@ -143,7 +138,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 		if loc.extension() == Some(OsStr::new("cpp")) || loc.components().any(|c| c == path::Component::Normal(OsStr::new("thirdparty"))) {
 			return clang::EntityVisitResult::Continue;
 		}
-		let loc = loc.to_string_lossy().into_owned();
+		let loc = loc.to_str().unwrap();
 
 		match c.get_kind() {
 			clang::EntityKind::VarDecl => {
@@ -193,7 +188,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 								ns.enums.push(_enum);
 							},
 							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
-								if let Some(mut class) = parse_class(underlying, loc) {
+								if let Some(mut class) = parse_class(underlying, loc.to_string()) {
 									class.name = c.get_name().unwrap();
 									ns.classes.push(class);
 								}
@@ -206,7 +201,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 				}
 			},
 			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
-				if let Some(class) = parse_class(c, loc) {
+				if let Some(class) = parse_class(c, loc.to_string()) {
 					if class.name != "auto" {
 						ns.classes.push(class);
 					}
@@ -220,7 +215,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 			clang::EntityKind::Namespace => {
 				if let Some(cns) = parse_namespace(c) {
 					if let Some(dns) = ns.namespaces.iter_mut().find(|dns| dns.name == cns.name) {
-						merge_namespace(dns, cns);
+						dns.merge(cns);
 						return clang::EntityVisitResult::Continue;
 					}
 
@@ -234,51 +229,6 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 	});
 
 	Some(ns)
-}
-
-
-
-fn merge_namespace(dst: &mut gdrs_api::Namespace, src: gdrs_api::Namespace) {
-	let gdrs_api::Namespace{name: _, consts, globals, enums, aliases, classes, functions, namespaces} = src;
-
-	for sc in consts.into_iter() {
-		if !dst.consts.iter().any(|dc| dc.name == sc.name) {
-			dst.consts.push(sc);
-		}
-	}
-	for sg in globals.into_iter() {
-		if !dst.globals.iter().any(|dg| dg.name == sg.name) {
-			dst.globals.push(sg);
-		}
-	}
-	for se in enums.into_iter() {
-		if !dst.enums.iter().any(|de| de.name == se.name) {
-			dst.enums.push(se);
-		}
-	}
-	for sa in aliases.into_iter() {
-		if !dst.aliases.iter().any(|da| da.name == sa.name) {
-			dst.aliases.push(sa);
-		}
-	}
-	for sf in functions.into_iter() {
-		if !dst.functions.iter().any(|df| df.name == sf.name) {
-			dst.functions.push(sf);
-		}
-	}
-	for sc in classes.into_iter() {
-		if !dst.classes.iter().any(|dc| dc.name == sc.name) {
-			dst.classes.push(sc);
-		}
-	}
-	for sn in namespaces.into_iter() {
-		if let Some(mut dn) = dst.namespaces.iter_mut().find(|dn| dn.name == sn.name) {
-			merge_namespace(dn, sn);
-			continue;
-		}
-
-		dst.namespaces.push(sn);
-	}
 }
 
 

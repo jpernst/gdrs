@@ -182,3 +182,53 @@ pub enum Value {
 	Double(f64),
 	String(String),
 }
+
+
+
+impl Namespace {
+	pub fn merge(&mut self, src: Namespace) {
+		let Namespace{name: _, consts, globals, enums, aliases, classes, functions, namespaces} = src;
+
+		for sc in consts.into_iter() {
+			if !self.consts.iter().any(|dc| dc.name == sc.name) {
+				self.consts.push(sc);
+			}
+		}
+		for sg in globals.into_iter() {
+			if !self.globals.iter().any(|dg| dg.name == sg.name) {
+				self.globals.push(sg);
+			}
+		}
+		for se in enums.into_iter() {
+			if !self.enums.iter().any(|de| de.name == se.name) {
+				self.enums.push(se);
+			}
+		}
+		for sa in aliases.into_iter() {
+			if !self.aliases.iter().any(|da| da.name == sa.name) {
+				self.aliases.push(sa);
+			}
+		}
+		for sf in functions.into_iter() {
+			if !self.functions.iter().any(|df| df.name == sf.name) {
+				self.functions.push(sf);
+			}
+		}
+		for sc in classes.into_iter() {
+			if !self.classes.iter().any(|dc| dc.name == sc.name) {
+				self.classes.push(sc);
+			}
+		}
+		for sn in namespaces.into_iter() {
+			if let Some(mut dn) = self.namespaces.iter_mut().find(|dn| dn.name == sn.name) {
+				dn.merge(sn);
+				continue;
+			}
+
+			self.namespaces.push(sn);
+		}
+	}
+}
+
+
+

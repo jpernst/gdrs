@@ -11,7 +11,7 @@ rustc_version = env.RustcVersion()
 
 api_flags = []
 api_flags.extend(filter(lambda f: f.startswith("-D"), env["CPPFLAGS"]))
-api_flags.extend(map(lambda p: "-I" + os.path.join(Dir("#").abspath, p[1:]), filter(lambda p: p.startswith("#"), env["CPPPATH"])))
+api_flags.extend(map(lambda p: "-I" + os.path.join(".", p[1:]), filter(lambda p: p.startswith("#"), env["CPPPATH"])))
 
 api_sources = []
 for s in env.core_sources:
@@ -26,9 +26,9 @@ for s in env.drivers_sources:
 	api_sources.append(File(s) if isinstance(s, str) else s[0].children(False)[0])
 
 env.Command(
-	"godot-api{}.json".format(os.path.splitext(env["LIBSUFFIX"])[0]),
+	"gdrs-api{}.json".format(os.path.splitext(env["LIBSUFFIX"])[0]),
 	api_sources + [parse],
-	"{} -o$TARGET {} {}".format(str(parse), " ".join(api_flags), " ".join(map(lambda s: str(s), api_sources)))
+	"{} -o$TARGET {} {}".format(str(parse), " ".join(api_flags), " ".join(map(lambda s: os.path.relpath(str(s), Dir("#").abspath), api_sources)))
 )
 
 [host, host_macros] = env.RustGodotModule("libgdrs-host", "gdrs-host", [rustc_version])
