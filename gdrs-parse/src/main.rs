@@ -483,8 +483,8 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 	t = t.get_elaborated_type().unwrap_or(t);
 
 	let semantic = match t.get_kind() {
-		clang::TypeKind::Pointer => {
-			t = t.get_pointee_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
+		clang::TypeKind::Pointer | clang::TypeKind::IncompleteArray => {
+			t = t.get_pointee_type().or_else(|| t.get_element_type()).map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
 			if t.get_kind() == clang::TypeKind::Pointer {
 				t = t.get_pointee_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
 				gdrs_api::TypeSemantic::PointerToPointer
@@ -504,11 +504,17 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 		clang::TypeKind::ConstantArray => {
 			let size = t.get_size().unwrap();
 			t = t.get_element_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
-			if t.get_kind() == clang::TypeKind::Pointer {
-				t = t.get_pointee_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
-				gdrs_api::TypeSemantic::ArrayOfPointer(size)
-			} else {
-				gdrs_api::TypeSemantic::Array(size)
+			match t.get_kind() {
+				clang::TypeKind::ConstantArray => {
+					let size1 = t.get_size().unwrap();
+					t = t.get_element_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
+					gdrs_api::TypeSemantic::ArrayOfArray(size, size1)
+				},
+				clang::TypeKind::Pointer => {
+					t = t.get_pointee_type().map(|t| t.get_elaborated_type().unwrap_or(t)).unwrap();
+					gdrs_api::TypeSemantic::ArrayOfPointer(size)
+				},
+				_ => gdrs_api::TypeSemantic::Array(size),
 			}
 		},
 		_ => gdrs_api::TypeSemantic::Value,
@@ -539,7 +545,7 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 
 			clang::TypeKind::Void if semantic != gdrs_api::TypeSemantic::Value => gdrs_api::TypeName::Void,
 
-			k if k == clang::TypeKind::Enum || k == clang::TypeKind::Typedef || k == clang::TypeKind::Record => {
+			k if k == clang::TypeKind::Typedef || k == clang::TypeKind::Enum || k == clang::TypeKind::Record => {
 				let mut p = t.get_declaration().unwrap();
 				let mut name_path = Vec::new();
 				loop {
@@ -547,11 +553,12 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 						name_path.insert(0, comp);
 					} else {
 						let _ = writeln!(io::stderr(), "WARNING: Anonymous parent");
-						return Err(ParseError::Ignored);
+						return Err(ParseError::Unsupported);
 					}
 					p = p.get_semantic_parent().unwrap();
-					if p.get_kind() == clang::EntityKind::TranslationUnit {
-						break;
+					match p.get_kind() {
+						clang::EntityKind::TranslationUnit | clang::EntityKind::UnexposedDecl => break,
+						_ => (),
 					}
 				}
 

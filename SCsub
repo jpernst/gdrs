@@ -28,7 +28,7 @@ for s in env.drivers_sources:
 env.Command(
 	"gdrs-api{}.json".format(os.path.splitext(env["LIBSUFFIX"])[0]),
 	api_sources + [parse],
-	"{} -o$TARGET {} {}".format(str(parse), " ".join(api_flags), " ".join(map(lambda s: os.path.relpath(str(s), Dir("#").abspath), api_sources)))
+	"env RUST_BACKTRACE=1 {} -o$TARGET {} {}".format(str(parse), " ".join(api_flags), " ".join(map(lambda s: os.path.relpath(str(s), Dir("#").abspath), api_sources)))
 )
 
 [host, host_macros] = env.RustGodotModule("libgdrs-host", "gdrs-host", [rustc_version])

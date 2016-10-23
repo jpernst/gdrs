@@ -106,6 +106,7 @@ pub enum TypeSemantic {
 	Reference,
 	ReferenceToPointer,
 	Array(usize),
+	ArrayOfArray(usize, usize),
 	ArrayOfPointer(usize),
 }
 

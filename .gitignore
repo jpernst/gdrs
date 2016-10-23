@@ -4,6 +4,7 @@ target/
 Cargo.lock
 rustc-version
 gdrs-macros.d/
+gdrs-api*.json
 *.macros.cpp
 *.o
 *.a
