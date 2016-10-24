@@ -207,6 +207,9 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 					}
 				}
 			},
+			clang::EntityKind::UnionDecl => {
+				println!("UNION: {:?}", c);
+			},
 			clang::EntityKind::FunctionDecl => {
 				if let Some(func) = parse_function(c) {
 					ns.functions.push(func);
@@ -414,6 +417,9 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 					}
 				}
 			},
+			clang::EntityKind::UnionDecl => {
+				println!("UNION: {:?}", c);
+			},
 			_ => (),
 		}
 
@@ -549,16 +555,13 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 				let mut p = t.get_declaration().unwrap();
 				let mut name_path = Vec::new();
 				loop {
-					if let Some(comp) = p.get_name() {
-						name_path.insert(0, comp);
-					} else {
-						let _ = writeln!(io::stderr(), "WARNING: Anonymous parent");
-						return Err(ParseError::Unsupported);
-					}
+					name_path.push(p.get_name().unwrap_or_else(|| "auto".to_string()));
 					p = p.get_semantic_parent().unwrap();
-					match p.get_kind() {
-						clang::EntityKind::TranslationUnit | clang::EntityKind::UnexposedDecl => break,
-						_ => (),
+					while p.get_kind() == clang::EntityKind::UnexposedDecl && p.get_name().is_none() {
+						p = p.get_semantic_parent().unwrap();
+					}
+					if p.get_kind() == clang::EntityKind::TranslationUnit {
+						break;
 					}
 				}
 
