@@ -187,7 +187,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 								_enum.name = c.get_name().unwrap();
 								ns.enums.push(_enum);
 							},
-							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
+							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl | clang::EntityKind::UnionDecl => {
 								if let Some(mut class) = parse_class(underlying, loc.to_string()) {
 									class.name = c.get_name().unwrap();
 									ns.classes.push(class);
@@ -208,7 +208,11 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 				}
 			},
 			clang::EntityKind::UnionDecl => {
-				println!("UNION: {:?}", c);
+				if let Some(union) = parse_class(c, loc.to_string()) {
+					if union.name != "auto" {
+						ns.classes.push(union);
+					}
+				}
 			},
 			clang::EntityKind::FunctionDecl => {
 				if let Some(func) = parse_function(c) {
@@ -290,10 +294,12 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 		name: e.get_name().unwrap_or_else(|| "auto".to_string()),
 		inherits: None,
 		is_pod: e.get_type().unwrap().is_pod(),
+		is_union: e.get_kind() == clang::EntityKind::UnionDecl,
 		consts: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
 		fields: Vec::with_capacity(0),
+		anon_unions: Vec::with_capacity(0),
 		ctors: Vec::with_capacity(0),
 		methods: Vec::with_capacity(0),
 		virtual_dtor: false,
@@ -418,7 +424,13 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 				}
 			},
 			clang::EntityKind::UnionDecl => {
-				println!("UNION: {:?}", c);
+				if let Some(union) = parse_class(c, loc.to_string()) {
+					if union.name != "auto" {
+						class.classes.push(union);
+					} else {
+						class.anon_unions.push(union);
+					}
+				}
 			},
 			_ => (),
 		}
