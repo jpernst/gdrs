@@ -2,7 +2,6 @@
 
 extern crate serde;
 extern crate docopt;
-extern crate tempdir;
 extern crate clang;
 #[macro_use]
 extern crate serde_derive;
@@ -19,7 +18,6 @@ use std::path;
 use std::io::{self, Write};
 use std::ffi::OsStr;
 use docopt::Docopt;
-use tempdir::TempDir;
 
 
 
@@ -70,7 +68,7 @@ fn main() {
 			return;
 		}
 
-		let mut flags = vec!["-xc++".to_string()];
+		let mut flags = Vec::new();
 		if let Some(defines) = defines {
 			flags.extend(defines.into_iter().map(|d| format!("-D{}", d)));
 		}
@@ -81,26 +79,32 @@ fn main() {
 		(output, flags, files)
 	};
 
-	let tmp_dir = TempDir::new("gdrs-parse").unwrap();
-	let unity_path = tmp_dir.path().join("unity.cpp");
-	{
-		let mut unity = fs::File::create(&unity_path).unwrap();
-		for file in &files {
-			writeln!(unity, r#"#include "{}""#, file).unwrap();
-		}
-	}
-
 	let c = clang::Clang::new().unwrap();
-	let mut index = clang::Index::new(&c, true, false);
+	let mut index = clang::Index::new(&c, true, true);
 	index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
 
-	let mut parser = index.parser(unity_path);
-	parser.arguments(&flags);
-	//let parser = parser.detailed_preprocessing_record(true);
-	let parser = parser.skip_function_bodies(true);
+	let mut tus = Vec::new();
+	for file in &files {
+		let mut parser = index.parser(file);
+		parser.arguments(&flags);
+		//let parser = parser.detailed_preprocessing_record(true);
+		let parser = parser.skip_function_bodies(true);
+		tus.push(parser.parse().unwrap());
+	}
 
-	let mut api = parse_namespace(parser.parse().unwrap().get_entity()).unwrap();
-	api.name = "".to_string();
+	let mut api = gdrs_api::Namespace{
+		name: "".to_string(),
+		consts: Vec::with_capacity(0),
+		globals: Vec::with_capacity(0),
+		enums: Vec::with_capacity(0),
+		aliases: Vec::with_capacity(0),
+		functions: Vec::with_capacity(0),
+		classes: Vec::with_capacity(0),
+		namespaces: Vec::with_capacity(0),
+	};
+	for tu in &tus {
+		api.merge(parse_namespace(tu.get_entity()).unwrap());
+	}
 
 	let json = serde_json::to_string_pretty(&api).unwrap();
 	if output == "-" {
@@ -115,7 +119,7 @@ fn main() {
 
 fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 	let name = e.get_name();
-	if let None = name {
+	if name.is_none() {
 		return None;
 	}
 
@@ -229,6 +233,8 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 					ns.namespaces.push(cns);
 				}
 			},
+			clang::EntityKind::ClassTemplate => {
+			},
 			_ => (),
 		}
 
@@ -285,7 +291,7 @@ fn parse_alias(e: clang::Entity) -> Option<gdrs_api::TypeAlias> {
 
 
 fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
-	if !e.is_definition() || e.get_template().is_some() {
+	if !e.is_definition() {
 		return None;
 	}
 
