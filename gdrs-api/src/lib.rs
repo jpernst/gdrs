@@ -9,8 +9,7 @@ extern crate serde_derive;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Namespace {
 	pub name: String,
-	pub consts: Vec<Const>,
-	pub globals: Vec<Global>,
+	pub globals: Vec<Var>,
 	pub enums: Vec<Enum>,
 	pub aliases: Vec<TypeAlias>,
 	pub functions: Vec<Function>,
@@ -21,16 +20,7 @@ pub struct Namespace {
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Const {
-	pub name: String,
-	pub ty: TypeRef,
-	pub value: Value,
-}
-
-
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Global {
+pub struct Var {
 	pub name: String,
 	pub ty: TypeRef,
 }
@@ -40,7 +30,7 @@ pub struct Global {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Enum {
 	pub name: String,
-	pub underlying: TypeRef,
+	pub underlying: TypeKind,
 	pub variants: Vec<Variant>,
 }
 
@@ -56,7 +46,7 @@ pub struct Variant {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TypeAlias {
-	pub name: String,
+	pub name: ScopeName,
 	pub ty: TypeRef,
 }
 
@@ -65,11 +55,10 @@ pub struct TypeAlias {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Class {
 	pub include: String,
-	pub name: String,
-	pub inherits: Option<TypeName>,
+	pub name: ScopeName,
+	pub inherits: Option<TypeRef>,
 	pub is_pod: bool,
 	pub is_union: bool,
-	pub consts: Vec<Const>,
 	pub enums: Vec<Enum>,
 	pub aliases: Vec<TypeAlias>,
 	pub fields: Vec<Field>,
@@ -82,7 +71,7 @@ pub struct Class {
 
 
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Access {
 	Public,
 	Protected,
@@ -90,7 +79,7 @@ pub enum Access {
 
 
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum FunctionSemantic {
 	Free,
 	Static,
@@ -127,7 +116,7 @@ pub struct Field {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Function {
 	pub name: String,
-	pub params: Vec<Param>,
+	pub params: Vec<Var>,
 	pub return_ty: Option<TypeRef>,
 	pub semantic: FunctionSemantic,
 	pub access: Access,
@@ -136,17 +125,18 @@ pub struct Function {
 
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TypeRef {
-	pub name: TypeName,
+	pub kind: TypeKind,
 	pub semantic: TypeSemantic,
 	pub is_const: bool,
+	pub value: Option<Value>,
 }
 
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TypeName {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TypeKind {
 	Void,
 	Bool,
 	Char,
@@ -162,17 +152,15 @@ pub enum TypeName {
 	ULongLong,
 	Float,
 	Double,
-	TypeName(Vec<String>),
-	Class(Vec<String>, Vec<TypeRef>),
+	Elaborated(Vec<ScopeName>),
 }
 
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Param {
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ScopeName {
 	pub name: String,
-	pub ty: TypeRef,
-	pub default: Option<Value>,
+	pub args: Vec<TypeRef>,
 }
 
 
@@ -190,13 +178,8 @@ pub enum Value {
 
 impl Namespace {
 	pub fn merge(&mut self, src: Namespace) {
-		let Namespace{name: _, consts, globals, enums, aliases, classes, functions, namespaces} = src;
+		let Namespace{name: _, globals, enums, aliases, classes, functions, namespaces} = src;
 
-		for sc in consts.into_iter() {
-			if !self.consts.iter().any(|dc| dc.name == sc.name) {
-				self.consts.push(sc);
-			}
-		}
 		for sg in globals.into_iter() {
 			if !self.globals.iter().any(|dg| dg.name == sg.name) {
 				self.globals.push(sg);

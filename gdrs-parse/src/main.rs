@@ -83,18 +83,8 @@ fn main() {
 	let mut index = clang::Index::new(&c, true, true);
 	index.set_thread_options(clang::ThreadOptions{editing: false, indexing: false});
 
-	let mut tus = Vec::new();
-	for file in &files {
-		let mut parser = index.parser(file);
-		parser.arguments(&flags);
-		//let parser = parser.detailed_preprocessing_record(true);
-		let parser = parser.skip_function_bodies(true);
-		tus.push(parser.parse().unwrap());
-	}
-
 	let mut api = gdrs_api::Namespace{
 		name: "".to_string(),
-		consts: Vec::with_capacity(0),
 		globals: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
@@ -102,8 +92,13 @@ fn main() {
 		classes: Vec::with_capacity(0),
 		namespaces: Vec::with_capacity(0),
 	};
-	for tu in &tus {
-		api.merge(parse_namespace(tu.get_entity()).unwrap());
+
+	for file in &files {
+		let mut parser = index.parser(file);
+		parser.arguments(&flags);
+		//let parser = parser.detailed_preprocessing_record(true);
+		let parser = parser.skip_function_bodies(true);
+		api.merge(parse_namespace(parser.parse().unwrap().get_entity()).unwrap());
 	}
 
 	let json = serde_json::to_string_pretty(&api).unwrap();
@@ -125,7 +120,6 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 
 	let mut ns = gdrs_api::Namespace{
 		name: name.unwrap(),
-		consts: Vec::with_capacity(0),
 		globals: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
@@ -148,15 +142,16 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 			clang::EntityKind::VarDecl => {
 				if c.get_type().unwrap().is_const_qualified() {
 					if let Some(val) = c.get_child(0).and_then(|exp| parse_value(exp)) {
-						ns.consts.push(gdrs_api::Const{
-							ty: parse_type(c.get_type().unwrap()).or_else(|_| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap(),
+						let mut ty = parse_type(c.get_type().unwrap()).or_else(|_| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap();
+						ty.value = Some(val);
+						ns.globals.push(gdrs_api::Var{
+							ty: ty,
 							name: c.get_name().unwrap(),
-							value: val,
 						})
 					}
 				} else if c.get_storage_class() == Some(clang::StorageClass::Extern) {
 					match parse_type(c.get_type().unwrap()) {
-						Ok(ty) => ns.globals.push(gdrs_api::Global{
+						Ok(ty) => ns.globals.push(gdrs_api::Var{
 							ty: ty,
 							name: c.get_name().unwrap(),
 						}),
@@ -172,10 +167,9 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 				if _enum.name == "auto" {
 					let gdrs_api::Enum{variants, underlying, ..} = _enum;
 					for v in variants.into_iter() {
-						ns.consts.push(gdrs_api::Const{
-							ty: underlying.clone(),
+						ns.globals.push(gdrs_api::Var{
 							name: v.name,
-							value: v.value,
+							ty: gdrs_api::TypeRef{kind: underlying.clone(), semantic: gdrs_api::TypeSemantic::Value, is_const: true, value: Some(v.value)},
 						});
 					}
 				} else {
@@ -193,7 +187,7 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 							},
 							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl | clang::EntityKind::UnionDecl => {
 								if let Some(mut class) = parse_class(underlying, loc.to_string()) {
-									class.name = c.get_name().unwrap();
+									class.name.name = c.get_name().unwrap();
 									ns.classes.push(class);
 								}
 							},
@@ -205,15 +199,17 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 				}
 			},
 			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
-				if let Some(class) = parse_class(c, loc.to_string()) {
-					if class.name != "auto" {
-						ns.classes.push(class);
+				if c.get_template().is_none() {
+					if let Some(class) = parse_class(c, loc.to_string()) {
+						if class.name.name != "auto" {
+							ns.classes.push(class);
+						}
 					}
 				}
 			},
 			clang::EntityKind::UnionDecl => {
 				if let Some(union) = parse_class(c, loc.to_string()) {
-					if union.name != "auto" {
+					if union.name.name != "auto" {
 						ns.classes.push(union);
 					}
 				}
@@ -233,8 +229,6 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 					ns.namespaces.push(cns);
 				}
 			},
-			clang::EntityKind::ClassTemplate => {
-			},
 			_ => (),
 		}
 
@@ -247,20 +241,20 @@ fn parse_namespace(e: clang::Entity) -> Option<gdrs_api::Namespace> {
 
 
 fn parse_enum(e: &clang::Entity) -> gdrs_api::Enum {
-	let underlying = parse_type(e.get_enum_underlying_type().unwrap()).unwrap();
+	let underlying = parse_type(e.get_enum_underlying_type().unwrap()).unwrap().kind;
 	let mut _enum = gdrs_api::Enum{
 		name: e.get_name().unwrap_or_else(|| "auto".to_string()),
-		underlying: underlying.clone(),
+		underlying: underlying,
 		variants: Vec::new(),
 	};
 
 	e.visit_children(|c, _| {
 		_enum.variants.push(gdrs_api::Variant{
 			name: c.get_name().unwrap(),
-			value: match _enum.underlying.name {
-				gdrs_api::TypeName::Char | gdrs_api::TypeName::Short | gdrs_api::TypeName::Int | gdrs_api::TypeName::Long | gdrs_api::TypeName::LongLong
+			value: match _enum.underlying {
+				gdrs_api::TypeKind::Char | gdrs_api::TypeKind::Short | gdrs_api::TypeKind::Int | gdrs_api::TypeKind::Long | gdrs_api::TypeKind::LongLong
 					=> gdrs_api::Value::Int(c.get_enum_constant_value().map(|(v, _)| v).unwrap()),
-				gdrs_api::TypeName::UChar | gdrs_api::TypeName::UShort | gdrs_api::TypeName::UInt | gdrs_api::TypeName::ULong | gdrs_api::TypeName::ULongLong
+				gdrs_api::TypeKind::UChar | gdrs_api::TypeKind::UShort | gdrs_api::TypeKind::UInt | gdrs_api::TypeKind::ULong | gdrs_api::TypeKind::ULongLong
 					=> gdrs_api::Value::UInt(c.get_enum_constant_value().map(|(_, v)| v).unwrap()),
 				_ => unreachable!(),
 			},
@@ -277,7 +271,7 @@ fn parse_enum(e: &clang::Entity) -> gdrs_api::Enum {
 fn parse_alias(e: clang::Entity) -> Option<gdrs_api::TypeAlias> {
 	match parse_type(e.get_typedef_underlying_type().unwrap()) {
 		Ok(ty) => Some(gdrs_api::TypeAlias{
-			name: e.get_name().unwrap(),
+			name: gdrs_api::ScopeName{name: e.get_name().unwrap(), args: Vec::with_capacity(0)},
 			ty: ty,
 		}),
 		Err(ParseError::Unsupported) => {
@@ -297,11 +291,10 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 
 	let mut class = gdrs_api::Class{
 		include: loc.clone(),
-		name: e.get_name().unwrap_or_else(|| "auto".to_string()),
+		name: gdrs_api::ScopeName{name: e.get_name().unwrap_or_else(|| "auto".to_string()), args: Vec::with_capacity(0)},
 		inherits: None,
-		is_pod: e.get_type().unwrap().is_pod(),
+		is_pod: e.get_type().map(|t| t.is_pod()).unwrap_or(false),
 		is_union: e.get_kind() == clang::EntityKind::UnionDecl,
-		consts: Vec::with_capacity(0),
 		enums: Vec::with_capacity(0),
 		aliases: Vec::with_capacity(0),
 		fields: Vec::with_capacity(0),
@@ -321,18 +314,19 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 				}
 				return clang::EntityVisitResult::Continue;
 			},
-			Some(a) => a,
+			Some(clang::Accessibility::Protected) => gdrs_api::Access::Protected,
+			Some(clang::Accessibility::Public) => gdrs_api::Access::Public,
 			None => return clang::EntityVisitResult::Continue,
 		};
 
 		match c.get_kind() {
 			clang::EntityKind::BaseSpecifier => {
-				if access == clang::Accessibility::Public {
+				if access == gdrs_api::Access::Public {
 					if class.inherits.is_some() {
 						let _ = writeln!(io::stderr(), "WARNING: Multiple inheritance `{:?}`: {:?}", c, e);
 					} else {
 						match parse_type(c.get_type().unwrap()) {
-							Ok(t) => class.inherits = Some(t.name),
+							Ok(t) => class.inherits = Some(t),
 							Err(ParseError::Unsupported) => {
 								let _ = writeln!(io::stderr(), "WARNING: Unsupported base type `{:?}`: {:?}", c, e);
 							},
@@ -346,12 +340,13 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 			clang::EntityKind::EnumDecl => {
 				let _enum = parse_enum(&c);
 				if _enum.name == "auto" {
-					let gdrs_api::Enum{variants, ..} = _enum;
+					let gdrs_api::Enum{variants, underlying, ..} = _enum;
 					for v in variants.into_iter() {
-						class.consts.push(gdrs_api::Const{
-							ty: _enum.underlying.clone(),
+						class.fields.push(gdrs_api::Field{
 							name: v.name,
-							value: v.value,
+							ty: gdrs_api::TypeRef{kind: underlying.clone(), semantic: gdrs_api::TypeSemantic::Value, is_const: true, value: Some(v.value)},
+							access: access,
+							is_static: true,
 						});
 					}
 				} else {
@@ -369,7 +364,7 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 							},
 							clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
 								if let Some(mut nested) = parse_class(underlying, loc.clone()) {
-									nested.name = c.get_name().unwrap();
+									nested.name.name = c.get_name().unwrap();
 									class.classes.push(nested);
 								}
 							},
@@ -383,10 +378,13 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 			clang::EntityKind::FieldDecl | clang::EntityKind::VarDecl => {
 				if c.get_type().unwrap().is_const_qualified() {
 					if let Some(val) = c.get_child(0).and_then(|exp| parse_value(exp)) {
-						class.consts.push(gdrs_api::Const{
-							ty: parse_type(c.get_type().unwrap()).or_else(|_| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap(),
+						let mut ty = parse_type(c.get_type().unwrap()).or_else(|_| parse_type(c.get_child(0).unwrap().get_type().unwrap())).unwrap();
+						ty.value = Some(val);
+						class.fields.push(gdrs_api::Field{
+							ty: ty,
 							name: c.get_name().unwrap(),
-							value: val,
+							access: access,
+							is_static: c.get_storage_class() == Some(clang::StorageClass::Static),
 						})
 					}
 				} else {
@@ -400,10 +398,10 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 					};
 
 					class.fields.push(gdrs_api::Field{
-						access: if let clang::Accessibility::Protected = access { gdrs_api::Access::Protected } else { gdrs_api::Access::Public },
-						is_static: c.get_storage_class() == Some(clang::StorageClass::Static),
 						name: c.get_name().unwrap(),
 						ty: ty,
+						access: access,
+						is_static: c.get_storage_class() == Some(clang::StorageClass::Static),
 					});
 				}
 			},
@@ -423,15 +421,17 @@ fn parse_class(e: clang::Entity, loc: String) -> Option<gdrs_api::Class> {
 				}
 			},
 			clang::EntityKind::ClassDecl | clang::EntityKind::StructDecl => {
-				if let Some(nested) = parse_class(c, loc.clone()) {
-					if nested.name != "auto" {
-						class.classes.push(nested);
+				if c.get_template().is_none() {
+					if let Some(nested) = parse_class(c, loc.clone()) {
+						if nested.name.name != "auto" {
+							class.classes.push(nested);
+						}
 					}
 				}
 			},
 			clang::EntityKind::UnionDecl => {
 				if let Some(union) = parse_class(c, loc.to_string()) {
-					if union.name != "auto" {
+					if union.name.name != "auto" {
 						class.classes.push(union);
 					} else {
 						class.anon_unions.push(union);
@@ -468,10 +468,10 @@ fn parse_function(e: clang::Entity) -> Option<gdrs_api::Function> {
 					return None;
 				}
 
-				params.into_iter().map(|(p, n, d)| gdrs_api::Param{
-					ty: p.unwrap(),
-					name: n,
-					default: d.and_then(|d| parse_value(d)),
+				params.into_iter().map(|(p, n, d)| {
+					let mut ty = p.unwrap();
+					ty.value = d.and_then(|d| parse_value(d));
+					gdrs_api::Var{ty: ty, name: n}
 				}).collect()
 			} else {
 				Vec::with_capacity(0)
@@ -545,72 +545,81 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 	};
 
 	Ok(gdrs_api::TypeRef{
-		name: match t.get_kind() {
+		kind: match t.get_kind() {
 			clang::TypeKind::Auto
 			| clang::TypeKind::Unexposed
 			| clang::TypeKind::BlockPointer
 			| clang::TypeKind::MemberPointer
 			=> return Err(ParseError::Ignored),
 
-			clang::TypeKind::Bool => gdrs_api::TypeName::Bool,
-			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_api::TypeName::Char,
-			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_api::TypeName::UChar,
-			clang::TypeKind::WChar => gdrs_api::TypeName::WChar,
-			clang::TypeKind::Short => gdrs_api::TypeName::Short,
-			clang::TypeKind::UShort => gdrs_api::TypeName::UShort,
-			clang::TypeKind::Int => gdrs_api::TypeName::Int,
-			clang::TypeKind::UInt => gdrs_api::TypeName::UInt,
-			clang::TypeKind::Long => gdrs_api::TypeName::Long,
-			clang::TypeKind::ULong => gdrs_api::TypeName::ULong,
-			clang::TypeKind::LongLong => gdrs_api::TypeName::LongLong,
-			clang::TypeKind::ULongLong => gdrs_api::TypeName::ULongLong,
-			clang::TypeKind::Float => gdrs_api::TypeName::Float,
-			clang::TypeKind::Double => gdrs_api::TypeName::Double,
+			clang::TypeKind::Bool => gdrs_api::TypeKind::Bool,
+			clang::TypeKind::CharS | clang::TypeKind::SChar => gdrs_api::TypeKind::Char,
+			clang::TypeKind::CharU | clang::TypeKind::UChar => gdrs_api::TypeKind::UChar,
+			clang::TypeKind::WChar => gdrs_api::TypeKind::WChar,
+			clang::TypeKind::Short => gdrs_api::TypeKind::Short,
+			clang::TypeKind::UShort => gdrs_api::TypeKind::UShort,
+			clang::TypeKind::Int => gdrs_api::TypeKind::Int,
+			clang::TypeKind::UInt => gdrs_api::TypeKind::UInt,
+			clang::TypeKind::Long => gdrs_api::TypeKind::Long,
+			clang::TypeKind::ULong => gdrs_api::TypeKind::ULong,
+			clang::TypeKind::LongLong => gdrs_api::TypeKind::LongLong,
+			clang::TypeKind::ULongLong => gdrs_api::TypeKind::ULongLong,
+			clang::TypeKind::Float => gdrs_api::TypeKind::Float,
+			clang::TypeKind::Double => gdrs_api::TypeKind::Double,
 
-			clang::TypeKind::Void if semantic != gdrs_api::TypeSemantic::Value => gdrs_api::TypeName::Void,
+			clang::TypeKind::Void if semantic != gdrs_api::TypeSemantic::Value => gdrs_api::TypeKind::Void,
 
 			k if k == clang::TypeKind::Typedef || k == clang::TypeKind::Enum || k == clang::TypeKind::Record => {
 				let mut p = t.get_declaration().unwrap();
 				let mut name_path = Vec::new();
+
 				loop {
-					name_path.push(p.get_name().unwrap_or_else(|| "auto".to_string()));
+					let name = p.get_name().unwrap_or_else(|| "auto".to_string());
+					match p.get_kind() {
+						clang::EntityKind::TranslationUnit => break,
+						clang::EntityKind::Namespace => {
+							name_path.push(gdrs_api::ScopeName{name: name, args: Vec::with_capacity(0)});
+						},
+						_ => match p.get_type().unwrap().get_kind() {
+							clang::TypeKind::Enum | clang::TypeKind::Typedef => {
+								name_path.push(gdrs_api::ScopeName{name: name, args: Vec::with_capacity(0)});
+							},
+							clang::TypeKind::Record => {
+								if let Some(args) = p.get_type().unwrap().get_template_argument_types().map(|a| a.into_iter().map(|a| parse_type(a.unwrap())).collect::<Vec<_>>()) {
+									if let Some(i) = args.iter().position(|a| a.is_err()) {
+										match *args[i].as_ref().unwrap_err() {
+											ParseError::Unsupported => {
+												let _ = writeln!(
+													io::stderr(),
+													"WARNING: Unsupported template param type `{:?}`",
+													p.get_type().unwrap().get_template_argument_types().unwrap()[i]
+												);
+												return Err(ParseError::Unsupported);
+											},
+											ParseError::Ignored => return Err(ParseError::Ignored),
+										}
+									}
+
+									name_path.push(gdrs_api::ScopeName{name: name, args: args.into_iter().map(|a| a.unwrap()).collect()});
+								} else {
+									name_path.push(gdrs_api::ScopeName{name: name, args: Vec::with_capacity(0)});
+								}
+							},
+							_ => {
+								let _ = writeln!(io::stderr(), "WARNING: Unsupported scope parent: `{:?}`", p);
+								return Err(ParseError::Unsupported);
+							},
+						},
+					}
+
 					p = p.get_semantic_parent().unwrap();
 					while p.get_kind() == clang::EntityKind::UnexposedDecl && p.get_name().is_none() {
 						p = p.get_semantic_parent().unwrap();
 					}
-					if p.get_kind() == clang::EntityKind::TranslationUnit {
-						break;
-					}
 				}
 
-				match k {
-					clang::TypeKind::Enum | clang::TypeKind::Typedef => {
-						gdrs_api::TypeName::TypeName(name_path)
-					},
-					clang::TypeKind::Record => {
-						if let Some(params) = t.get_template_argument_types().map(|vp| vp.into_iter().map(|p| parse_type(p.unwrap())).collect::<Vec<_>>()) {
-							if let Some(i) = params.iter().position(|p| p.is_err()) {
-								match *params[i].as_ref().unwrap_err() {
-									ParseError::Unsupported => {
-										let _ = writeln!(io::stderr(), "WARNING: Unsupported template param type `{:?}`", t.get_template_argument_types().unwrap()[i]);
-										return Err(ParseError::Unsupported);
-									},
-									ParseError::Ignored => return Err(ParseError::Ignored),
-								}
-							}
-
-							gdrs_api::TypeName::Class(
-								name_path,
-								params.into_iter().map(|p| p.unwrap()).collect()
-							)
-						} else {
-							gdrs_api::TypeName::Class(name_path, Vec::with_capacity(0))
-						}
-					},
-					_ => unreachable!(),
-				}
+				gdrs_api::TypeKind::Elaborated(name_path)
 			},
-
 			k => {
 				let _ = writeln!(io::stderr(), "WARNING: Unsupported type kind `{:?}`", k);
 				return Err(ParseError::Unsupported);
@@ -618,13 +627,14 @@ fn parse_type(mut t: clang::Type) -> Result<gdrs_api::TypeRef, ParseError> {
 		},
 		semantic: semantic,
 		is_const: t.is_const_qualified(),
+		value: None,
 	})
 }
 
 
 
-fn parse_value(exp: clang::Entity) -> Option<gdrs_api::Value> {
-	if let (Some(kind), Some(val)) = (exp.get_type().map(|t| t.get_kind()), exp.evaluate()) {
+fn parse_value(expr: clang::Entity) -> Option<gdrs_api::Value> {
+	if let (Some(kind), Some(val)) = (expr.get_type().map(|t| t.get_kind()), expr.evaluate()) {
 		match val {
 			clang::EvaluationResult::Integer(i)
 				if kind == clang::TypeKind::CharU
@@ -648,7 +658,7 @@ fn parse_value(exp: clang::Entity) -> Option<gdrs_api::Value> {
 			clang::EvaluationResult::Float(d) if kind == clang::TypeKind::Double => Some(gdrs_api::Value::Double(d)),
 			clang::EvaluationResult::String(s) => Some(gdrs_api::Value::String(s.to_string_lossy().into_owned())),
 			v => {
-				let _ = writeln!(io::stderr(), "WARNING: Unsupported evaluation result `{:?}`: {:?}", v, exp);
+				let _ = writeln!(io::stderr(), "WARNING: Unsupported evaluation result `{:?}`: {:?}", v, expr);
 				return None;
 			},
 		}
